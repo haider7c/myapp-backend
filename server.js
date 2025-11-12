@@ -15,7 +15,6 @@ app.use('/api/customers', require('./routes/customerRoutes'));
 app.use('/api/bills', require('./routes/billRoutes'));
 app.use('/api/billstatuses', require('./routes/billStatusRoutes'));
 app.use('/api/packages', require('./routes/packageRoutes'));
-app.use('/api/manualbills', require('./routes/manualBillRoutes'));
 app.use('/api/counters', require('./routes/counterRoutes'));
 
 const PORT = process.env.PORT || 5000;
