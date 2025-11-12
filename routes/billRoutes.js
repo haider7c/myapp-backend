@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const Bill = require('../models/Bill.js');
+const Bill = require('../models/Bill');
 
 // Get all bills
 router.get('/', async (req, res) => {
