@@ -2,13 +2,29 @@ const express = require('express');
 const router = express.Router();
 const Customer = require('../models/Customer');
 
-// Get all customers
-router.get('/', async (req, res) => {
+// Backend update needed:
+router.get("/", async (req, res) => {
   try {
-    const customers = await Customer.find();
+    const { date } = req.query;
+    let customers;
+
+    if (date) {
+      // Convert date to start and end of the day
+      const selectedDate = new Date(date);
+      const nextDate = new Date(selectedDate);
+      nextDate.setDate(selectedDate.getDate() + 1);
+
+      // CHANGE THIS: Filter by billReceiveDate instead of regDate
+      customers = await Customer.find({
+        billReceiveDate: { $gte: selectedDate, $lt: nextDate },
+      });
+    } else {
+      customers = await Customer.find();
+    }
+
     res.json(customers);
-  } catch (err) {
-    res.status(500).json({ message: err.message });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
   }
 });
 
