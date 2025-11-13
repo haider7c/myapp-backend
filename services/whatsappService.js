@@ -1,6 +1,7 @@
 // services/whatsappService.js
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
+const path = require('path');
 const Customer = require('../models/Customer');
 
 class WhatsAppService {
@@ -8,7 +9,34 @@ class WhatsAppService {
     this.client = null;
     this.isReady = false;
     this.currentQR = null;
+    this.statusListeners = []; // Add this for real-time updates
     this.init();
+  }
+
+  // Add status listener for real-time updates
+  onStatusUpdate(callback) {
+    this.statusListeners.push(callback);
+  }
+
+  // Remove status listener
+  removeStatusListener(callback) {
+    const index = this.statusListeners.indexOf(callback);
+    if (index > -1) {
+      this.statusListeners.splice(index, 1);
+    }
+  }
+
+  // Notify all listeners of status change
+  notifyStatusUpdate() {
+    const status = this.getStatus();
+    console.log('🔔 Notifying status update:', status);
+    this.statusListeners.forEach(callback => {
+      try {
+        callback(status);
+      } catch (error) {
+        console.error('Error in status listener:', error);
+      }
+    });
   }
 
   init() {
@@ -17,7 +45,8 @@ class WhatsAppService {
       
       this.client = new Client({
         authStrategy: new LocalAuth({
-          clientId: "whatsapp-mobile-client"
+          clientId: "whatsapp-mobile-client",
+          dataPath: path.join(__dirname, '../whatsapp-session')
         }),
         puppeteer: {
           headless: true,
@@ -41,33 +70,40 @@ class WhatsAppService {
       this.client.on('qr', (qr) => {
         console.log('📱 WhatsApp QR Code received');
         this.currentQR = qr;
+        this.isReady = false;
         
         // Generate terminal QR
         qrcode.generate(qr, { small: true });
         console.log('Scan the QR code above with WhatsApp');
+        
+        this.notifyStatusUpdate(); // Notify status change
       });
 
       this.client.on('ready', () => {
         console.log('✅ WhatsApp client is ready!');
         this.isReady = true;
         this.currentQR = null;
+        this.notifyStatusUpdate(); // Notify status change
       });
 
       this.client.on('authenticated', () => {
         console.log('✅ WhatsApp client authenticated!');
+        this.notifyStatusUpdate(); // Notify status change
       });
 
       this.client.on('auth_failure', (msg) => {
         console.error('❌ WhatsApp authentication failed:', msg);
         this.isReady = false;
+        this.notifyStatusUpdate(); // Notify status change
       });
 
       this.client.on('disconnected', (reason) => {
         console.log('❌ WhatsApp client disconnected:', reason);
         this.isReady = false;
         this.currentQR = null;
+        this.notifyStatusUpdate(); // Notify status change
         
-        // Attempt to reconnect after 5 seconds
+        // Auto-reconnect
         setTimeout(() => {
           console.log('🔄 Attempting to reconnect WhatsApp...');
           this.destroyClient();
@@ -75,14 +111,21 @@ class WhatsAppService {
         }, 5000);
       });
 
+      // Add loading state handler
+      this.client.on('loading_screen', (percent, message) => {
+        console.log(`🔄 WhatsApp loading: ${percent}% - ${message}`);
+      });
+
       this.client.initialize().then(() => {
         console.log('✅ WhatsApp client initialization started');
       }).catch(error => {
         console.error('❌ WhatsApp client initialization failed:', error);
+        this.notifyStatusUpdate(); // Notify status change even on failure
       });
 
     } catch (error) {
       console.error('❌ Failed to initialize WhatsApp client:', error);
+      this.notifyStatusUpdate();
     }
   }
 
@@ -122,6 +165,12 @@ class WhatsAppService {
     try {
       const formattedPhone = this.formatPhoneNumber(phone);
       console.log(`📤 Sending message to ${formattedPhone}`);
+      
+      // Validate if the number exists on WhatsApp
+      const isRegistered = await this.client.isRegisteredUser(formattedPhone);
+      if (!isRegistered) {
+        throw new Error(`Phone number ${phone} is not registered on WhatsApp`);
+      }
       
       const response = await this.client.sendMessage(formattedPhone, message);
       console.log(`✅ Message sent to ${phone}: ${response.id._serialized}`);
@@ -290,18 +339,38 @@ Your ISP Team 🌐`;
     }
   }
 
-  // Get status
+  // Get status with enhanced information
   getStatus() {
     return {
       isReady: this.isReady,
       isConnected: this.isReady,
-      hasQR: !!this.currentQR
+      hasQR: !!this.currentQR,
+      timestamp: new Date().toISOString(),
+      sessionSaved: this.client ? true : false
     };
   }
 
   // Get current QR code
   getCurrentQR() {
     return this.currentQR;
+  }
+
+  // Test connection by checking if client is ready
+  async testConnection() {
+    try {
+      if (!this.client) {
+        return { success: false, error: 'WhatsApp client not initialized' };
+      }
+      
+      const state = await this.client.getState();
+      return { 
+        success: state === 'CONNECTED', 
+        state: state,
+        isReady: this.isReady 
+      };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
   }
 
   // Regenerate QR code
@@ -315,6 +384,7 @@ Your ISP Team 🌐`;
       
       this.isReady = false;
       this.currentQR = null;
+      this.notifyStatusUpdate();
       
       // Reinitialize after a short delay
       setTimeout(() => {
@@ -334,9 +404,20 @@ Your ISP Team 🌐`;
       try {
         await this.client.destroy();
         this.client = null;
+        this.isReady = false;
+        this.currentQR = null;
+        this.notifyStatusUpdate();
       } catch (error) {
         console.error('Error destroying client:', error);
       }
+    }
+  }
+
+  // Clean up all listeners
+  cleanup() {
+    this.statusListeners = [];
+    if (this.client) {
+      this.client.removeAllListeners();
     }
   }
 }
