@@ -2,6 +2,7 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const path = require('path');
+const fs = require('fs');
 const Customer = require('../models/Customer');
 
 class WhatsAppService {
@@ -9,8 +10,38 @@ class WhatsAppService {
     this.client = null;
     this.isReady = false;
     this.currentQR = null;
-    this.statusListeners = []; // Add this for real-time updates
+    this.statusListeners = [];
+    this.sessionPath = path.join(__dirname, '../whatsapp-sessions');
+    this.ensureSessionDirectory();
     this.init();
+  }
+
+  // Ensure session directory exists
+  ensureSessionDirectory() {
+    if (!fs.existsSync(this.sessionPath)) {
+      fs.mkdirSync(this.sessionPath, { recursive: true });
+      console.log('✅ Created session directory:', this.sessionPath);
+    }
+  }
+
+  // Check if session exists
+  checkSessionExists() {
+    try {
+      const sessionFile = path.join(this.sessionPath, 'whatsapp-mobile-client', 'session.json');
+      return fs.existsSync(sessionFile);
+    } catch (error) {
+      return false;
+    }
+  }
+
+  // Get session status
+  getSessionStatus() {
+    return {
+      sessionExists: this.checkSessionExists(),
+      sessionPath: this.sessionPath,
+      sessionFile: path.join(this.sessionPath, 'whatsapp-mobile-client', 'session.json'),
+      sessionDirectoryExists: fs.existsSync(this.sessionPath)
+    };
   }
 
   // Add status listener for real-time updates
@@ -42,11 +73,13 @@ class WhatsAppService {
   init() {
     try {
       console.log('🔄 Initializing WhatsApp client...');
+      console.log('📁 Session path:', this.sessionPath);
+      console.log('💾 Session exists:', this.checkSessionExists());
       
       this.client = new Client({
         authStrategy: new LocalAuth({
           clientId: "whatsapp-mobile-client",
-          dataPath: path.join(__dirname, '../whatsapp-session')
+          dataPath: this.sessionPath
         }),
         puppeteer: {
           headless: true,
@@ -57,7 +90,8 @@ class WhatsAppService {
             '--disable-accelerated-2d-canvas',
             '--no-first-run',
             '--no-zygote',
-            '--disable-gpu'
+            '--disable-gpu',
+            '--single-process'
           ]
         },
         webVersionCache: {
@@ -76,39 +110,40 @@ class WhatsAppService {
         qrcode.generate(qr, { small: true });
         console.log('Scan the QR code above with WhatsApp');
         
-        this.notifyStatusUpdate(); // Notify status change
+        this.notifyStatusUpdate();
       });
 
       this.client.on('ready', () => {
         console.log('✅ WhatsApp client is ready!');
         this.isReady = true;
         this.currentQR = null;
-        this.notifyStatusUpdate(); // Notify status change
+        console.log('💾 Session saved successfully');
+        this.notifyStatusUpdate();
       });
 
       this.client.on('authenticated', () => {
         console.log('✅ WhatsApp client authenticated!');
-        this.notifyStatusUpdate(); // Notify status change
+        this.notifyStatusUpdate();
       });
 
       this.client.on('auth_failure', (msg) => {
         console.error('❌ WhatsApp authentication failed:', msg);
         this.isReady = false;
-        this.notifyStatusUpdate(); // Notify status change
+        this.notifyStatusUpdate();
       });
 
       this.client.on('disconnected', (reason) => {
         console.log('❌ WhatsApp client disconnected:', reason);
         this.isReady = false;
         this.currentQR = null;
-        this.notifyStatusUpdate(); // Notify status change
+        this.notifyStatusUpdate();
         
-        // Auto-reconnect
+        // Auto-reconnect with delay
         setTimeout(() => {
           console.log('🔄 Attempting to reconnect WhatsApp...');
           this.destroyClient();
           this.init();
-        }, 5000);
+        }, 10000); // Increased to 10 seconds
       });
 
       // Add loading state handler
@@ -116,11 +151,16 @@ class WhatsAppService {
         console.log(`🔄 WhatsApp loading: ${percent}% - ${message}`);
       });
 
+      // Handle session restoration
+      this.client.on('remote_session_saved', () => {
+        console.log('💾 Remote session saved successfully');
+      });
+
       this.client.initialize().then(() => {
         console.log('✅ WhatsApp client initialization started');
       }).catch(error => {
         console.error('❌ WhatsApp client initialization failed:', error);
-        this.notifyStatusUpdate(); // Notify status change even on failure
+        this.notifyStatusUpdate();
       });
 
     } catch (error) {
@@ -341,12 +381,15 @@ Your ISP Team 🌐`;
 
   // Get status with enhanced information
   getStatus() {
+    const sessionStatus = this.getSessionStatus();
     return {
       isReady: this.isReady,
       isConnected: this.isReady,
       hasQR: !!this.currentQR,
       timestamp: new Date().toISOString(),
-      sessionSaved: this.client ? true : false
+      sessionSaved: sessionStatus.sessionExists,
+      sessionExists: sessionStatus.sessionExists,
+      sessionPath: sessionStatus.sessionPath
     };
   }
 
@@ -369,6 +412,37 @@ Your ISP Team 🌐`;
         isReady: this.isReady 
       };
     } catch (error) {
+      return { success: false, error: error.message };
+    }
+  }
+
+  // Clear session (for debugging)
+  async clearSession() {
+    try {
+      console.log('🗑️ Clearing WhatsApp session...');
+      if (this.client) {
+        await this.client.destroy();
+      }
+      
+      // Delete session files
+      const sessionDir = path.join(this.sessionPath, 'whatsapp-mobile-client');
+      if (fs.existsSync(sessionDir)) {
+        fs.rmSync(sessionDir, { recursive: true, force: true });
+        console.log('✅ Session cleared successfully');
+      }
+      
+      this.isReady = false;
+      this.currentQR = null;
+      this.notifyStatusUpdate();
+      
+      // Reinitialize
+      setTimeout(() => {
+        this.init();
+      }, 2000);
+      
+      return { success: true, message: 'Session cleared successfully' };
+    } catch (error) {
+      console.error('❌ Error clearing session:', error);
       return { success: false, error: error.message };
     }
   }

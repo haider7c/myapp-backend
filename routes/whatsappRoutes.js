@@ -4,6 +4,8 @@ const router = express.Router();
 const Customer = require("../models/Customer");
 const BillStatus = require("../models/BillStatus");
 const whatsappService = require("../services/whatsappService");
+const fs = require('fs');
+const path = require('path');
 
 // Get WhatsApp status
 router.get("/status", async (req, res) => {
@@ -14,6 +16,36 @@ router.get("/status", async (req, res) => {
     console.error('Status route error:', error);
     res.status(500).json({ 
       error: "Failed to get WhatsApp status: " + error.message 
+    });
+  }
+});
+
+// Get session status
+router.get("/session-status", async (req, res) => {
+  try {
+    const sessionStatus = whatsappService.getSessionStatus();
+    const whatsappStatus = whatsappService.getStatus();
+    
+    res.json({
+      ...sessionStatus,
+      whatsappStatus,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Clear session (for debugging)
+router.post("/clear-session", async (req, res) => {
+  try {
+    const result = await whatsappService.clearSession();
+    res.json(result);
+  } catch (error) {
+    console.error('Clear session error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
     });
   }
 });
