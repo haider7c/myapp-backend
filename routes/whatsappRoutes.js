@@ -332,4 +332,4 @@ router.get("/qr-code", async (req, res) => {
   }
 });
 
-module.exports = router;s
+module.exports = router;
