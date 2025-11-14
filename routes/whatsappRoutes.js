@@ -28,8 +28,8 @@ router.post("/restart-service", async (req, res) => {
       success: false,
       error: error.message,
     });
-  });
-});
+  }
+}); // ← REMOVED EXTRA ) HERE
 
 // Start service
 router.post("/start-service", async (req, res) => {
