@@ -1,11 +1,8 @@
-// routes/whatsappRoutes.js
 const express = require("express");
 const router = express.Router();
 const Customer = require("../models/Customer");
 const BillStatus = require("../models/BillStatus");
 const whatsappService = require("../services/whatsappService");
-const fs = require('fs');
-const path = require('path');
 
 // Get WhatsApp status
 router.get("/status", async (req, res) => {
@@ -20,7 +17,7 @@ router.get("/status", async (req, res) => {
   }
 });
 
-// Add this route to your existing whatsappRoutes.js
+// Restart service
 router.post("/restart-service", async (req, res) => {
   try {
     const result = await whatsappService.restartService();
@@ -30,6 +27,65 @@ router.post("/restart-service", async (req, res) => {
     res.status(500).json({
       success: false,
       error: error.message,
+    });
+  });
+});
+
+// Start service
+router.post("/start-service", async (req, res) => {
+  try {
+    whatsappService.init();
+    res.json({
+      success: true,
+      message: "WhatsApp service starting..."
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+// Stop service
+router.post("/stop-service", async (req, res) => {
+  try {
+    await whatsappService.clearSession();
+    res.json({
+      success: true,
+      message: "WhatsApp service stopped"
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+// Session keep-alive
+router.post("/keep-alive", async (req, res) => {
+  try {
+    if (!whatsappService.isReady) {
+      return res.json({ 
+        success: false, 
+        error: "WhatsApp not connected",
+        requiresReconnect: true
+      });
+    }
+
+    res.json({
+      success: true,
+      state: "connected",
+      timestamp: new Date().toISOString(),
+      lastActivity: whatsappService.lastActivity
+    });
+  } catch (error) {
+    console.error('Keep-alive error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message,
+      requiresReconnect: true
     });
   }
 });
@@ -50,7 +106,7 @@ router.get("/session-status", async (req, res) => {
   }
 });
 
-// Clear session (for debugging)
+// Clear session
 router.post("/clear-session", async (req, res) => {
   try {
     const result = await whatsappService.clearSession();
@@ -83,11 +139,26 @@ router.post("/send-test", async (req, res) => {
       return res.status(503).json({
         success: false,
         error: "WhatsApp is not connected. Please scan the QR code first.",
+        requiresReconnect: true
       });
     }
 
     console.log('Sending test message via WhatsApp service...');
-    const result = await whatsappService.sendMessage(phone, message);
+    
+    // Add retry logic
+    let result;
+    let attempts = 0;
+    const maxAttempts = 2;
+    
+    while (attempts < maxAttempts) {
+      result = await whatsappService.sendMessage(phone, message);
+      if (result.success) break;
+      attempts++;
+      if (attempts < maxAttempts) {
+        console.log(`Retrying message send... (${attempts}/${maxAttempts})`);
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+    }
     
     console.log('Send test result:', result);
     res.json(result);
@@ -97,6 +168,7 @@ router.post("/send-test", async (req, res) => {
     res.status(500).json({
       success: false,
       error: error.message,
+      requiresReconnect: true
     });
   }
 });
@@ -111,6 +183,7 @@ router.post("/send-payment-reminder/:customerId", async (req, res) => {
       return res.status(503).json({
         success: false,
         error: "WhatsApp is not connected",
+        requiresReconnect: true
       });
     }
 
@@ -123,6 +196,7 @@ router.post("/send-payment-reminder/:customerId", async (req, res) => {
     res.status(500).json({
       success: false,
       error: error.message,
+      requiresReconnect: true
     });
   }
 });
@@ -139,6 +213,7 @@ router.post("/send-thank-you/:customerId", async (req, res) => {
       return res.status(503).json({
         success: false,
         error: "WhatsApp is not connected",
+        requiresReconnect: true
       });
     }
 
@@ -157,6 +232,7 @@ router.post("/send-thank-you/:customerId", async (req, res) => {
     res.status(500).json({
       success: false,
       error: error.message,
+      requiresReconnect: true
     });
   }
 });
@@ -180,6 +256,7 @@ router.post("/send-custom-message/:customerId", async (req, res) => {
       return res.status(503).json({
         success: false,
         error: "WhatsApp is not connected",
+        requiresReconnect: true
       });
     }
 
@@ -192,6 +269,7 @@ router.post("/send-custom-message/:customerId", async (req, res) => {
     res.status(500).json({
       success: false,
       error: error.message,
+      requiresReconnect: true
     });
   }
 });
@@ -206,6 +284,7 @@ router.post("/send-expiry-reminder/:customerId", async (req, res) => {
       return res.status(503).json({
         success: false,
         error: "WhatsApp is not connected",
+        requiresReconnect: true
       });
     }
 
@@ -218,21 +297,19 @@ router.post("/send-expiry-reminder/:customerId", async (req, res) => {
     res.status(500).json({
       success: false,
       error: error.message,
+      requiresReconnect: true
     });
   }
 });
 
-// Get expiring packages (unpaid customers with bill dates in next 3 days)
+// Get expiring packages
 router.get("/expiring-packages", async (req, res) => {
   try {
     const { days = 3 } = req.query;
     const today = new Date();
     const todayDay = today.getDate();
 
-    // Get all customers
     const allCustomers = await Customer.find();
-
-    // Filter customers whose bill date is within the next X days and are unpaid
     const expiringPackages = [];
 
     for (let i = 1; i <= parseInt(days); i++) {
@@ -243,7 +320,6 @@ router.get("/expiring-packages", async (req, res) => {
         return billDay === targetDay;
       });
 
-      // Check payment status for each customer
       for (const customer of customersWithTargetDay) {
         const billStatus = await BillStatus.findOne({
           customerId: customer._id,
@@ -251,7 +327,6 @@ router.get("/expiring-packages", async (req, res) => {
           year: today.getFullYear(),
         });
 
-        // Only include unpaid customers
         if (!billStatus || billStatus.billStatus === false) {
           expiringPackages.push({
             ...customer.toObject(),
@@ -269,20 +344,18 @@ router.get("/expiring-packages", async (req, res) => {
   }
 });
 
-// Get due today packages (unpaid customers with bill date today)
+// Get due today packages
 router.get("/due-today", async (req, res) => {
   try {
     const today = new Date();
     const todayDay = today.getDate();
 
-    // Get all customers with bill date today
     const allCustomers = await Customer.find();
     const dueCustomers = allCustomers.filter(customer => {
       const billDay = parseInt(customer.billReceiveDate);
       return billDay === todayDay;
     });
 
-    // Filter only unpaid customers
     const unpaidDueCustomers = [];
     
     for (const customer of dueCustomers) {
