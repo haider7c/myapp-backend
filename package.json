@@ -1,9 +1,17 @@
 {
   "name": "ispos-backend",
   "version": "1.0.0",
+  "description": "ISP Management System Backend with WhatsApp Integration",
   "main": "server.js",
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  },
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "build": "npm install",
+    "dev": "nodemon server.js",
+    "test": "echo \"No tests specified\" && exit 0"
   },
   "dependencies": {
     "cors": "^2.8.5",
@@ -13,5 +21,14 @@
     "puppeteer": "^24.30.0",
     "qrcode-terminal": "^0.12.0",
     "whatsapp-web.js": "^1.34.2"
-  }
+  },
+  "keywords": [
+    "isp",
+    "whatsapp",
+    "management",
+    "billing",
+    "customer"
+  ],
+  "author": "Your Name",
+  "license": "MIT"
 }
