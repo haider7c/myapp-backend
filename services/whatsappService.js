@@ -11,16 +11,24 @@ class WhatsAppService {
     this.isReady = false;
     this.currentQR = null;
     this.statusListeners = [];
-    this.sessionPath = path.join(__dirname, '../whatsapp-sessions');
+    this.sessionPath = path.join(process.cwd(), 'whatsapp-sessions');
+    this.initializationAttempts = 0;
+    this.maxInitializationAttempts = 3;
+    this.isInitializing = false;
+    
     this.ensureSessionDirectory();
     this.init();
   }
 
   // Ensure session directory exists
   ensureSessionDirectory() {
-    if (!fs.existsSync(this.sessionPath)) {
-      fs.mkdirSync(this.sessionPath, { recursive: true });
-      console.log('✅ Created session directory:', this.sessionPath);
+    try {
+      if (!fs.existsSync(this.sessionPath)) {
+        fs.mkdirSync(this.sessionPath, { recursive: true });
+        console.log('✅ Created session directory:', this.sessionPath);
+      }
+    } catch (error) {
+      console.error('❌ Failed to create session directory:', error);
     }
   }
 
@@ -28,8 +36,11 @@ class WhatsAppService {
   checkSessionExists() {
     try {
       const sessionFile = path.join(this.sessionPath, 'whatsapp-mobile-client', 'session.json');
-      return fs.existsSync(sessionFile);
+      const exists = fs.existsSync(sessionFile);
+      console.log('📁 Session exists:', exists, 'at:', sessionFile);
+      return exists;
     } catch (error) {
+      console.error('❌ Error checking session:', error);
       return false;
     }
   }
@@ -40,7 +51,8 @@ class WhatsAppService {
       sessionExists: this.checkSessionExists(),
       sessionPath: this.sessionPath,
       sessionFile: path.join(this.sessionPath, 'whatsapp-mobile-client', 'session.json'),
-      sessionDirectoryExists: fs.existsSync(this.sessionPath)
+      sessionDirectoryExists: fs.existsSync(this.sessionPath),
+      initializationAttempts: this.initializationAttempts
     };
   }
 
@@ -60,7 +72,6 @@ class WhatsAppService {
   // Notify all listeners of status change
   notifyStatusUpdate() {
     const status = this.getStatus();
-    console.log('🔔 Notifying status update:', status);
     this.statusListeners.forEach(callback => {
       try {
         callback(status);
@@ -70,12 +81,36 @@ class WhatsAppService {
     });
   }
 
-  init() {
+  async init() {
+    if (this.isInitializing) {
+      console.log('🔄 WhatsApp client is already initializing...');
+      return;
+    }
+
+    if (this.initializationAttempts >= this.maxInitializationAttempts) {
+      console.error('❌ Max initialization attempts reached. Stopping...');
+      return;
+    }
+
+    this.isInitializing = true;
+    this.initializationAttempts++;
+
     try {
-      console.log('🔄 Initializing WhatsApp client...');
-      console.log('📁 Session path:', this.sessionPath);
-      console.log('💾 Session exists:', this.checkSessionExists());
+      console.log(`🔄 Initializing WhatsApp client (attempt ${this.initializationAttempts}/${this.maxInitializationAttempts})...`);
       
+      // Clean up previous client if exists
+      if (this.client) {
+        try {
+          await this.client.destroy();
+        } catch (error) {
+          console.log('⚠️ Error destroying previous client:', error);
+        }
+        this.client = null;
+      }
+
+      const sessionExists = this.checkSessionExists();
+      console.log('💾 Session exists before initialization:', sessionExists);
+
       this.client = new Client({
         authStrategy: new LocalAuth({
           clientId: "whatsapp-mobile-client",
@@ -84,15 +119,18 @@ class WhatsAppService {
         puppeteer: {
           headless: true,
           args: [
-            '--no-sandbox', 
-            '--disable-setuid-sandbox', 
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
             '--disable-accelerated-2d-canvas',
             '--no-first-run',
             '--no-zygote',
             '--disable-gpu',
-            '--single-process'
-          ]
+            '--single-process',
+            '--no-zygote',
+            '--max-old-space-size=256'
+          ],
+          executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || null
         },
         webVersionCache: {
           type: 'remote',
@@ -100,72 +138,100 @@ class WhatsAppService {
         }
       });
 
-      // QR Code Handler
-      this.client.on('qr', (qr) => {
-        console.log('📱 WhatsApp QR Code received');
-        this.currentQR = qr;
-        this.isReady = false;
-        
-        // Generate terminal QR
-        qrcode.generate(qr, { small: true });
-        console.log('Scan the QR code above with WhatsApp');
-        
-        this.notifyStatusUpdate();
-      });
+      // Setup event handlers
+      this.setupEventHandlers();
 
-      this.client.on('ready', () => {
-        console.log('✅ WhatsApp client is ready!');
-        this.isReady = true;
-        this.currentQR = null;
-        console.log('💾 Session saved successfully');
-        this.notifyStatusUpdate();
-      });
-
-      this.client.on('authenticated', () => {
-        console.log('✅ WhatsApp client authenticated!');
-        this.notifyStatusUpdate();
-      });
-
-      this.client.on('auth_failure', (msg) => {
-        console.error('❌ WhatsApp authentication failed:', msg);
-        this.isReady = false;
-        this.notifyStatusUpdate();
-      });
-
-      this.client.on('disconnected', (reason) => {
-        console.log('❌ WhatsApp client disconnected:', reason);
-        this.isReady = false;
-        this.currentQR = null;
-        this.notifyStatusUpdate();
-        
-        // Auto-reconnect with delay
-        setTimeout(() => {
-          console.log('🔄 Attempting to reconnect WhatsApp...');
-          this.destroyClient();
-          this.init();
-        }, 10000); // Increased to 10 seconds
-      });
-
-      // Add loading state handler
-      this.client.on('loading_screen', (percent, message) => {
-        console.log(`🔄 WhatsApp loading: ${percent}% - ${message}`);
-      });
-
-      // Handle session restoration
-      this.client.on('remote_session_saved', () => {
-        console.log('💾 Remote session saved successfully');
-      });
-
-      this.client.initialize().then(() => {
-        console.log('✅ WhatsApp client initialization started');
-      }).catch(error => {
-        console.error('❌ WhatsApp client initialization failed:', error);
-        this.notifyStatusUpdate();
-      });
+      console.log('🚀 Starting WhatsApp client initialization...');
+      await this.client.initialize();
+      console.log('✅ WhatsApp client initialization started successfully');
 
     } catch (error) {
-      console.error('❌ Failed to initialize WhatsApp client:', error);
+      console.error('❌ WhatsApp client initialization failed:', error);
+      this.handleInitializationError(error);
+    } finally {
+      this.isInitializing = false;
+    }
+  }
+
+  setupEventHandlers() {
+    // QR Code Handler
+    this.client.on('qr', (qr) => {
+      console.log('📱 WhatsApp QR Code received');
+      this.currentQR = qr;
+      this.isReady = false;
+      
+      // Generate terminal QR
+      qrcode.generate(qr, { small: true });
+      console.log('Scan the QR code above with WhatsApp');
+      
       this.notifyStatusUpdate();
+    });
+
+    this.client.on('ready', () => {
+      console.log('✅ WhatsApp client is ready!');
+      this.isReady = true;
+      this.currentQR = null;
+      this.initializationAttempts = 0; // Reset attempts on success
+      console.log('💾 Session should be saved');
+      this.notifyStatusUpdate();
+    });
+
+    this.client.on('authenticated', () => {
+      console.log('✅ WhatsApp client authenticated!');
+      this.notifyStatusUpdate();
+    });
+
+    this.client.on('auth_failure', (msg) => {
+      console.error('❌ WhatsApp authentication failed:', msg);
+      this.isReady = false;
+      this.currentQR = null;
+      this.notifyStatusUpdate();
+    });
+
+    this.client.on('disconnected', (reason) => {
+      console.log('❌ WhatsApp client disconnected:', reason);
+      this.isReady = false;
+      this.currentQR = null;
+      this.notifyStatusUpdate();
+      
+      // Don't auto-reconnect immediately to prevent loops
+      console.log('⏳ Waiting before reconnection...');
+      setTimeout(() => {
+        console.log('🔄 Attempting to reconnect WhatsApp...');
+        this.init();
+      }, 30000); // Wait 30 seconds before reconnection
+    });
+
+    // Add loading state handler
+    this.client.on('loading_screen', (percent, message) => {
+      console.log(`🔄 WhatsApp loading: ${percent}% - ${message}`);
+    });
+
+    this.client.on('remote_session_saved', () => {
+      console.log('💾 Remote session saved successfully');
+    });
+  }
+
+  handleInitializationError(error) {
+    console.error('❌ Initialization error details:', {
+      message: error.message,
+      stack: error.stack,
+      attempts: this.initializationAttempts
+    });
+
+    this.isReady = false;
+    this.currentQR = null;
+    this.notifyStatusUpdate();
+
+    // Don't retry immediately to prevent loops
+    if (this.initializationAttempts < this.maxInitializationAttempts) {
+      const retryDelay = Math.min(30000, this.initializationAttempts * 10000); // Max 30 seconds
+      console.log(`⏳ Retrying initialization in ${retryDelay/1000} seconds...`);
+      setTimeout(() => {
+        this.init();
+      }, retryDelay);
+    } else {
+      console.error('🚨 Max initialization attempts reached. Manual intervention required.');
     }
   }
 
@@ -205,12 +271,6 @@ class WhatsAppService {
     try {
       const formattedPhone = this.formatPhoneNumber(phone);
       console.log(`📤 Sending message to ${formattedPhone}`);
-      
-      // Validate if the number exists on WhatsApp
-      const isRegistered = await this.client.isRegisteredUser(formattedPhone);
-      if (!isRegistered) {
-        throw new Error(`Phone number ${phone} is not registered on WhatsApp`);
-      }
       
       const response = await this.client.sendMessage(formattedPhone, message);
       console.log(`✅ Message sent to ${phone}: ${response.id._serialized}`);
@@ -252,13 +312,6 @@ Best regards,
 Your ISP Team 🌐`;
 
       const result = await this.sendMessage(customer.phone, message);
-      
-      if (result.success) {
-        console.log(`✅ Payment reminder sent to ${customer.customerName}`);
-      } else {
-        console.log(`❌ Failed to send payment reminder to ${customer.customerName}: ${result.error}`);
-      }
-      
       return result;
     } catch (error) {
       console.error('❌ Error sending payment reminder:', error);
@@ -298,13 +351,6 @@ Best regards,
 Your ISP Team 🌐`;
 
       const result = await this.sendMessage(customer.phone, message);
-      
-      if (result.success) {
-        console.log(`✅ Thank you message sent to ${customer.customerName}`);
-      } else {
-        console.log(`❌ Failed to send thank you message to ${customer.customerName}: ${result.error}`);
-      }
-      
       return result;
     } catch (error) {
       console.error('❌ Error sending thank you message:', error);
@@ -334,13 +380,6 @@ Best regards,
 Your ISP Team 🌐`;
 
       const result = await this.sendMessage(customer.phone, message);
-      
-      if (result.success) {
-        console.log(`✅ Custom message sent to ${customer.customerName}`);
-      } else {
-        console.log(`❌ Failed to send custom message to ${customer.customerName}: ${result.error}`);
-      }
-      
       return result;
     } catch (error) {
       console.error('❌ Error sending custom message:', error);
@@ -389,7 +428,9 @@ Your ISP Team 🌐`;
       timestamp: new Date().toISOString(),
       sessionSaved: sessionStatus.sessionExists,
       sessionExists: sessionStatus.sessionExists,
-      sessionPath: sessionStatus.sessionPath
+      sessionPath: sessionStatus.sessionPath,
+      initializationAttempts: this.initializationAttempts,
+      isInitializing: this.isInitializing
     };
   }
 
@@ -433,16 +474,38 @@ Your ISP Team 🌐`;
       
       this.isReady = false;
       this.currentQR = null;
+      this.initializationAttempts = 0;
       this.notifyStatusUpdate();
-      
-      // Reinitialize
-      setTimeout(() => {
-        this.init();
-      }, 2000);
       
       return { success: true, message: 'Session cleared successfully' };
     } catch (error) {
       console.error('❌ Error clearing session:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  // Restart WhatsApp service
+  async restartService() {
+    try {
+      console.log('🔄 Restarting WhatsApp service...');
+      
+      if (this.client) {
+        await this.client.destroy();
+      }
+      
+      this.isReady = false;
+      this.currentQR = null;
+      this.initializationAttempts = 0;
+      this.isInitializing = false;
+      
+      // Wait a bit before restarting
+      setTimeout(() => {
+        this.init();
+      }, 5000);
+      
+      return { success: true, message: 'WhatsApp service restart initiated' };
+    } catch (error) {
+      console.error('❌ Error restarting service:', error);
       return { success: false, error: error.message };
     }
   }
@@ -458,12 +521,13 @@ Your ISP Team 🌐`;
       
       this.isReady = false;
       this.currentQR = null;
+      this.initializationAttempts = 0;
       this.notifyStatusUpdate();
       
       // Reinitialize after a short delay
       setTimeout(() => {
         this.init();
-      }, 2000);
+      }, 3000);
       
       return { success: true, message: 'QR code regeneration initiated' };
     } catch (error) {

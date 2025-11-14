@@ -20,6 +20,20 @@ router.get("/status", async (req, res) => {
   }
 });
 
+// Add this route to your existing whatsappRoutes.js
+router.post("/restart-service", async (req, res) => {
+  try {
+    const result = await whatsappService.restartService();
+    res.json(result);
+  } catch (error) {
+    console.error('Restart service error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
 // Get session status
 router.get("/session-status", async (req, res) => {
   try {
@@ -318,4 +332,4 @@ router.get("/qr-code", async (req, res) => {
   }
 });
 
-module.exports = router;
+module.exports = router;s
