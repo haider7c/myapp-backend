@@ -96,15 +96,28 @@ async function sendMessage(phone, message) {
   }
 
   try {
-    let num = phone.replace(/\D/g, "").replace(/^0/, "");
-    const jid = `92${num}@s.whatsapp.net`;
+    // Normalize phone number correctly
+    let num = phone.toString().replace(/\D/g, ""); // keep digits only
+
+    // If starts with 0 → convert to 92
+    if (num.startsWith("0")) {
+      num = "92" + num.substring(1);
+    }
+
+    // If already starts with 92 → keep as is
+    else if (!num.startsWith("92")) {
+      num = "92" + num;
+    }
+
+    const jid = `${num}@s.whatsapp.net`;
 
     await sock.sendMessage(jid, { text: message });
-
     return { success: true };
   } catch (err) {
+    console.log("❌ sendMessage error:", err);
     return { success: false, error: err.message };
   }
 }
+
 
 module.exports = createWhatsAppService;
