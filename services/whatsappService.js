@@ -90,28 +90,51 @@ function getStatus() {
   };
 }
 
+function normalizePhone(phone) {
+  if (!phone) return null;
+
+  let num = phone.toString().replace(/\D/g, "");
+
+  // Case 1: +923001234567 → 923001234567
+  if (num.startsWith("92") && num.length === 12) {
+    return num;
+  }
+
+  // Case 2: 03001234567 → 923001234567
+  if (num.startsWith("0") && num.length === 11) {
+    return "92" + num.substring(1);
+  }
+
+  // Case 3: 3001234567 → 923001234567
+  if (num.length === 10) {
+    return "92" + num;
+  }
+
+  // Case 4: already correct → keep it
+  if (num.startsWith("92") && num.length === 12) {
+    return num;
+  }
+
+  // Case 5: anything else → invalid
+  return null;
+}
+
+
 async function sendMessage(phone, message) {
   if (!socketReady || !sock) {
     return { success: false, error: "WhatsApp socket not ready" };
   }
 
   try {
-    // Normalize phone number correctly
-    let num = phone.toString().replace(/\D/g, ""); // keep digits only
-
-    // If starts with 0 → convert to 92
-    if (num.startsWith("0")) {
-      num = "92" + num.substring(1);
-    }
-
-    // If already starts with 92 → keep as is
-    else if (!num.startsWith("92")) {
-      num = "92" + num;
+    const num = normalizePhone(phone);
+    if (!num) {
+      return { success: false, error: "Invalid phone number format" };
     }
 
     const jid = `${num}@s.whatsapp.net`;
 
     await sock.sendMessage(jid, { text: message });
+
     return { success: true };
   } catch (err) {
     console.log("❌ sendMessage error:", err);
