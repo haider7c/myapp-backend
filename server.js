@@ -25,7 +25,7 @@ mongoose
 app.use("/api/whatsapp", require("./routes/whatsappRoutes"));
 app.use("/api/reminders", require("./routes/reminderRoutes"));
 app.use("/api/customers", require("./routes/customerRoutes"));
-app.use("/api/bill-status", require("./routes/billStatusRoutes"));
+app.use("/api/billstatuses", require("./routes/billStatusRoutes"));
 app.use("/api/packages", require("./routes/packageRoutes"));
 app.use("/api/bills", require("./routes/billRoutes"));
 
