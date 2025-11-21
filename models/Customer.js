@@ -18,6 +18,11 @@ const customerSchema = new mongoose.Schema({
   enum: ["active", "discontinued"],
   default: "active",
 },
+discontinuedAt: {
+  type: Date,
+  default: null,
+},
+
 
 }, { timestamps: true });
 

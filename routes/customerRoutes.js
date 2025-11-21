@@ -1,6 +1,6 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const Customer = require('../models/Customer');
+const Customer = require("../models/Customer");
 
 // =============================
 // GET ACTIVE CUSTOMERS
@@ -33,7 +33,10 @@ router.put("/:id/discontinue", async (req, res) => {
   try {
     const customer = await Customer.findByIdAndUpdate(
       req.params.id,
-      { status: "discontinued" },
+      {
+        status: "discontinued",
+        discontinuedAt: new Date(),
+      },
       { new: true }
     );
 
@@ -53,7 +56,10 @@ router.put("/:id/reactivate", async (req, res) => {
   try {
     const customer = await Customer.findByIdAndUpdate(
       req.params.id,
-      { status: "active" },
+      {
+        status: "active",
+        discontinuedAt: null, // <-- RESET discontinued date/time
+      },
       { new: true }
     );
 
