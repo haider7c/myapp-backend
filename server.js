@@ -8,6 +8,7 @@ require("dotenv").config();
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({extended: true}))
 
 // =====================
 // DATABASE CONNECT
@@ -28,6 +29,7 @@ app.use("/api/customers", require("./routes/customerRoutes"));
 app.use("/api/billstatuses", require("./routes/billStatusRoutes"));
 app.use("/api/packages", require("./routes/packageRoutes"));
 app.use("/api/bills", require("./routes/billRoutes"));
+
 
 // =====================
 app.get("/", (req, res) => res.json({ message: "API OK" }));

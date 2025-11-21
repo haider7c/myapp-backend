@@ -12,7 +12,13 @@ const customerSchema = new mongoose.Schema({
   email: String,
   synced: Boolean,
   packageName: String,
-  amount: Number
+  amount: Number,
+  status: {
+  type: String,
+  enum: ["active", "discontinued"],
+  default: "active",
+},
+
 }, { timestamps: true });
 
 module.exports = mongoose.model('Customer', customerSchema);
