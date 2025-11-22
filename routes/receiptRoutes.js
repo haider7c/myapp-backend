@@ -26,42 +26,81 @@ router.post("/generate-receipt", async (req, res) => {
       receivingDate,
     } = req.body;
 
-    // temp file path
     const fileName = `receipt_${Date.now()}.pdf`;
     const filePath = path.join(tempDir, fileName);
 
-    console.log("📝 Creating PDF:", filePath);
+    console.log("📝 Creating Styled PDF:", filePath);
 
-    const doc = new PDFDocument();
+    // MATCH Template2 size EXACTLY
+    const doc = new PDFDocument({
+      size: [420, 595], // Same as Template2 PDF size
+      margins: { top: 30, left: 20, right: 20, bottom: 20 }
+    });
+
     const stream = fs.createWriteStream(filePath);
-
     doc.pipe(stream);
 
-    doc.fontSize(20).text("Billing Receipt", { align: "center" });
-    doc.moveDown();
+    // ============================
+    // HEADER TITLE
+    // ============================
+    doc
+      .fontSize(22)
+      .font("Helvetica-Bold")
+      .text("Billing Receipt", { align: "center" })
+      .moveDown(1);
 
-    doc.fontSize(14).text(`Name: ${customerName}`);
-    doc.text(`Phone: ${phone}`);
-    doc.text(`CNIC: ${cnic || "N/A"}`);
-    doc.text(`Package: ${packageName}`);
-    doc.text(`Amount: Rs. ${amount}`);
-    doc.text(`Status: Paid`);
-    doc.text(`Method: ${paymentMethod}`);
-    doc.text(`Note: ${paymentNote || "N/A"}`);
-    doc.text(`Bill Date: ${billDate}`);
-    doc.text(`Receiving Date: ${receivingDate}`);
+    // ============================
+    // CENTERED CUSTOMER DETAILS BOX
+    // ============================
+    doc
+      .fontSize(12)
+      .font("Helvetica")
+      .text(`Name: ${customerName}`, { align: "center" })
+      .moveDown(0.3);
 
-    doc.moveDown();
-    doc.fontSize(12).text("Ali Haider's Creation", { align: "center" });
-    doc.text("0304-1275276", { align: "center" });
+    doc.text(`Phone: ${phone}`, { align: "center" }).moveDown(0.3);
+    doc.text(`CNIC: ${cnic || "N/A"}`, { align: "center" }).moveDown(0.3);
+    doc.text(`Package: ${packageName}`, { align: "center" }).moveDown(0.3);
+    doc.text(`Amount: Rs. ${amount}`, { align: "center" }).moveDown(0.3);
+    doc.text(`Payment Method: ${paymentMethod}`, { align: "center" }).moveDown(0.3);
+    doc.text(`Note: ${paymentNote || "N/A"}`, { align: "center" }).moveDown(0.3);
+    doc.text(`Bill Date: ${billDate}`, { align: "center" }).moveDown(0.3);
+    doc.text(`Receiving Date: ${receivingDate}`, { align: "center" }).moveDown(1);
+
+    // Divider line
+    doc
+      .moveDown(1)
+      .strokeColor("#000000")
+      .lineWidth(1)
+      .moveTo(20, doc.y)
+      .lineTo(400, doc.y)
+      .stroke();
+
+    // FOOTER (Same style as Template2)
+    doc
+      .moveDown(1.5)
+      .fontSize(12)
+      .font("Helvetica-Bold")
+      .text("Ali Haider's Creation", { align: "center" });
+
+    doc
+      .fontSize(10)
+      .font("Helvetica")
+      .text("0304-1275276", { align: "center" });
+
+    doc
+      .fontSize(10)
+      .text("Sadhar Bypass Chabba Road, Faisalabad", {
+        align: "center",
+      });
 
     doc.end();
 
     stream.on("finish", () => {
-      console.log("✅ PDF Generated Successfully");
+      console.log("✅ Styled PDF Generated Successfully");
       res.json({
         success: true,
-        filePath, // Full server path for Baileys
+        filePath,
         fileName,
       });
     });
