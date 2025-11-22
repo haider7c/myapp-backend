@@ -29,6 +29,8 @@ app.use("/api/customers", require("./routes/customerRoutes"));
 app.use("/api/billstatuses", require("./routes/billStatusRoutes"));
 app.use("/api/packages", require("./routes/packageRoutes"));
 app.use("/api/bills", require("./routes/billRoutes"));
+app.use("/api/counter", require("./routes/counterRoutes"));
+
 
 
 // =====================
