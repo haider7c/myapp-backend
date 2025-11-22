@@ -34,21 +34,23 @@ router.post("/send", async (req, res) => {
   if (result.success) res.json({ success: true });
   else res.status(500).json(result);
 });
+
+
+// backend/routes/whatsappRoutes.js
 router.post("/send-document", async (req, res) => {
   try {
+    const service = await whatsappServicePromise;
     const { phone, filePath, fileName } = req.body;
 
-    await whatsappClient.sendMessage(
-      `${phone}@s.whatsapp.net`,
-      MessageMedia.fromFilePath(filePath),
-      { sendMediaAsDocument: true, filename: fileName }
-    );
+    const result = await service.sendDocument(phone, filePath, fileName);
 
     res.json({ success: true });
   } catch (err) {
     res.json({ success: false, error: err.message });
   }
 });
+
+
 
 
 module.exports = router;
