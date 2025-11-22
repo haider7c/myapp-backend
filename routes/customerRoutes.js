@@ -124,5 +124,50 @@ router.post("/", async (req, res) => {
   }
 });
 
+// =============================
+// UPDATE CUSTOMER
+// =============================
+router.put("/:id", async (req, res) => {
+  try {
+    const updatedCustomer = await Customer.findByIdAndUpdate(
+      req.params.id,
+      req.body,
+      { new: true }
+    );
+
+    if (!updatedCustomer) {
+      return res.status(404).json({ message: "Customer not found" });
+    }
+
+    res.json({
+      message: "Customer updated successfully",
+      customer: updatedCustomer,
+    });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// =============================
+// DELETE CUSTOMER
+// =============================
+router.delete("/:id", async (req, res) => {
+  try {
+    const deletedCustomer = await Customer.findByIdAndDelete(req.params.id);
+
+    if (!deletedCustomer) {
+      return res.status(404).json({ message: "Customer not found" });
+    }
+
+    res.json({
+      message: "Customer deleted successfully",
+      customer: deletedCustomer,
+    });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+
 
 module.exports = router;
