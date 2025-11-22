@@ -111,4 +111,18 @@ router.get("/:id", async (req, res) => {
   }
 });
 
+// =============================
+// Create CUSTOMER (SINGLE ADDING ROUTE)
+// =============================
+
+router.post("/", async (req, res) => {
+  try {
+    const customer = await Customer.create(req.body);
+    res.json(customer);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+
 module.exports = router;
