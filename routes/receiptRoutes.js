@@ -1,8 +1,16 @@
+// backend/routes/receiptRoutes.js
 const express = require("express");
 const router = express.Router();
 const PDFDocument = require("pdfkit");
 const fs = require("fs");
 const path = require("path");
+
+// CREATE temp folder if missing (Fix for Render)
+const tempDir = path.join(__dirname, "../temp");
+if (!fs.existsSync(tempDir)) {
+  fs.mkdirSync(tempDir, { recursive: true });
+  console.log("📁 TEMP folder created:", tempDir);
+}
 
 router.post("/generate-receipt", async (req, res) => {
   try {
@@ -20,11 +28,13 @@ router.post("/generate-receipt", async (req, res) => {
 
     // temp file path
     const fileName = `receipt_${Date.now()}.pdf`;
-    const filePath = path.join(__dirname, "../temp", fileName);
+    const filePath = path.join(tempDir, fileName);
 
-    // Create PDF document
+    console.log("📝 Creating PDF:", filePath);
+
     const doc = new PDFDocument();
     const stream = fs.createWriteStream(filePath);
+
     doc.pipe(stream);
 
     doc.fontSize(20).text("Billing Receipt", { align: "center" });
@@ -48,14 +58,21 @@ router.post("/generate-receipt", async (req, res) => {
     doc.end();
 
     stream.on("finish", () => {
+      console.log("✅ PDF Generated Successfully");
       res.json({
         success: true,
-        filePath,
+        filePath, // Full server path for Baileys
         fileName,
       });
     });
+
+    stream.on("error", (err) => {
+      console.error("❌ PDF Write Error:", err);
+      res.status(500).json({ success: false, error: err.message });
+    });
+
   } catch (err) {
-    console.log(err);
+    console.error("❌ PDF Error:", err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
