@@ -79,7 +79,7 @@ router.post("/generate-receipt", async (req, res) => {
     // FOOTER (Same style as Template2)
     doc
       .moveDown(1.5)
-      .fontSize(12)
+      .fontSize(10)
       .font("Helvetica-Bold")
       .text("Ali Haider's Creation", { align: "center" });
 
@@ -88,11 +88,11 @@ router.post("/generate-receipt", async (req, res) => {
       .font("Helvetica")
       .text("0304-1275276", { align: "center" });
 
-    doc
-      .fontSize(10)
-      .text("Sadhar Bypass Chabba Road, Faisalabad", {
-        align: "center",
-      });
+    // doc
+    //   .fontSize(10)
+    //   .text("Sadhar Bypass Chabba Road, Faisalabad", {
+    //     align: "center",
+    //   });
 
     doc.end();
 
