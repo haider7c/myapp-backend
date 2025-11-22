@@ -30,6 +30,8 @@ app.use("/api/billstatuses", require("./routes/billStatusRoutes"));
 app.use("/api/packages", require("./routes/packageRoutes"));
 app.use("/api/bills", require("./routes/billRoutes"));
 app.use("/api/counters", require("./routes/counterRoutes"));
+app.use("/api/receipt", require("./routes/receiptRoutes"));
+
 
 
 
