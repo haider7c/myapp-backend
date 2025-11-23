@@ -7,7 +7,7 @@ const customerSchema = new mongoose.Schema({
   address: String,
   cnic: String,
   regDate: Date,
-  billReceiveDate: Date,
+  billReceiveDate: Number,
   customerId: String,
   email: String,
   synced: Boolean,
