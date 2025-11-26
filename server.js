@@ -32,6 +32,10 @@ app.use("/api/bills", require("./routes/billRoutes"));
 app.use("/api/counters", require("./routes/counterRoutes"));
 app.use("/api/receipt", require("./routes/receiptRoutes"));
 
+app.get("/health", (req, res) => {
+  res.status(200).send("OK");
+});
+
 
 
 
