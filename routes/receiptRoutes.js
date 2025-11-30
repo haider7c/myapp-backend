@@ -83,7 +83,7 @@ router.post("/generate-receipt", async (req, res) => {
     addRow("CNIC", maskCNIC(cnic));
     addRow("Package", packageName);
     addRow("Amount", `Rs. ${amount}`);
-    addRow("Status", billStatus ? "Paid" : "Unpaid");
+    addRow("Status", billStatus ? "Unpaid" : "Paid");
     addRow("Method", paymentMethod || "N/A");
 
     if (paymentNote) addRow("Note", paymentNote);
