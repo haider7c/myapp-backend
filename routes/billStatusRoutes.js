@@ -16,13 +16,22 @@ router.get('/', async (req, res) => {
 // POST new bill status
 router.post('/', async (req, res) => {
   try {
-    const billStatus = new BillStatus(req.body);
+    const payload = { ...req.body };
+
+    // ⭐ Automatically save billReceivedAt only when billStatus=true
+    if (payload.billStatus === true) {
+      payload.billReceivedAt = new Date();
+    }
+
+    const billStatus = new BillStatus(payload);
     const newBillStatus = await billStatus.save();
     res.status(201).json(newBillStatus);
+
   } catch (err) {
     res.status(400).json({ message: err.message });
   }
 });
+
 
 // PUT update bill status
 router.put('/:id', async (req, res) => {
