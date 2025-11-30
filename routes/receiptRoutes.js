@@ -122,3 +122,4 @@ router.post("/generate-receipt", async (req, res) => {
 });
 
 module.exports = router;
+
