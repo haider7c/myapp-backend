@@ -50,4 +50,29 @@ router.put('/:id', async (req, res) => {
   }
 });
 
+// PATCH: mark a bill as unpaid (set billStatus false + clear billReceivedAt)
+router.patch("/mark-unpaid/:id", async (req, res) => {
+  try {
+    const billStatus = await BillStatus.findByIdAndUpdate(
+      req.params.id,
+      {
+        billStatus: false,
+        billReceivedAt: null,
+        paymentMethod: "",
+        paymentNote: "",
+      },
+      { new: true }
+    );
+
+    if (!billStatus) {
+      return res.status(404).json({ message: "Bill not found" });
+    }
+
+    res.json({ success: true, billStatus });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+
 module.exports = router;
