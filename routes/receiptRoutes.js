@@ -11,9 +11,9 @@ if (!fs.existsSync(tempDir)) {
   fs.mkdirSync(tempDir, { recursive: true });
 }
 
-// A7 exact size (same as your React-PDF design)
-const A7_WIDTH = 2.9 * 72;   // ≈ 209 pts
-const A7_HEIGHT = 3.7 * 72;  // ≈ 266 pts
+// A7 exact size
+const A7_WIDTH = 2.9 * 72;   // 209 pts
+const A7_HEIGHT = 3.7 * 72;  // 266 pts
 
 router.post("/generate-receipt", async (req, res) => {
   try {
@@ -35,63 +35,75 @@ router.post("/generate-receipt", async (req, res) => {
 
     const doc = new PDFDocument({
       size: [A7_WIDTH, A7_HEIGHT],
-      margins: { top: 20, left: 18, right: 18, bottom: 20 }
+      margins: { top: 10, left: 14, right: 14, bottom: 10 }
     });
 
     const stream = fs.createWriteStream(filePath);
     doc.pipe(stream);
 
     // ==============================
-    // HEADER (CENTERED)
+    // HEADER
     // ==============================
     doc
-      .fontSize(18)
       .font("Helvetica-Bold")
+      .fontSize(14)
       .text("Billing Receipt", { align: "center" })
-      .moveDown(1);
+      .moveDown(0.7);
 
-    // ==============================
-    // BODY (LEFT ALIGNED - SAME AS IMAGE)
-    // ==============================
-    doc.font("Helvetica").fontSize(12);
+    // Smaller font for body
+    doc.fontSize(10).font("Helvetica");
 
-    const addLine = (label, value) => {
-      doc.text(`${label} ${value}`).moveDown(0.35);
+    // Helper for two-column rows
+    const addRow = (label, value) => {
+      const y = doc.y;
+
+      doc.text(label, 14, y, { width: 80 });
+
+      doc.text(value, 0, y, {
+        width: A7_WIDTH - 28,
+        align: "right"
+      });
+
+      doc.moveDown(0.45);
     };
 
-    // Mask CNIC except last digit (same behavior as your React-PDF)
-    const maskCNIC = (cnicValue) => {
-      if (!cnicValue) return "N/A";
-      const digits = cnicValue.replace(/\D/g, "");
-      if (digits.length === 0) return "N/A";
-      return digits.slice(0, -1).replace(/\d/g, "#") + digits.slice(-1);
+    // Mask CNIC (### except last digit)
+    const maskCNIC = (cnicVal) => {
+      if (!cnicVal) return "N/A";
+      const d = cnicVal.replace(/\D/g, "");
+      if (d.length === 0) return "N/A";
+      return d.slice(0, -1).replace(/\d/g, "#") + d.slice(-1);
     };
 
-    addLine("Name", customerName);
-    addLine("Phone", phone);
-    addLine("CNIC", maskCNIC(cnic));
-    addLine("Package", packageName);
-    addLine("Amount", `Rs. ${amount}`);
-    addLine("Status", billStatus ? "Paid" : "Unpaid");
-    addLine("Method", paymentMethod || "N/A");
+    // ==============================
+    // BODY CONTENT (Two columns)
+    // ==============================
+    addRow("Name", customerName);
+    addRow("Phone", phone);
+    addRow("CNIC", maskCNIC(cnic));
+    addRow("Package", packageName);
+    addRow("Amount", `Rs. ${amount}`);
+    addRow("Status", billStatus ? "Paid" : "Unpaid");
+    addRow("Method", paymentMethod || "N/A");
 
-    if (paymentNote) addLine("Note", paymentNote);
+    if (paymentNote) addRow("Note", paymentNote);
 
-    addLine("Bill Date", billDate);
-    addLine("Receiving Date", receivingDate);
+    addRow("Bill Date", billDate);
+    addRow("Receiving Date", receivingDate);
 
     // ==============================
-    // FOOTER (CENTERED)
+    // FOOTER
     // ==============================
-    doc.moveDown(1.2);
+    doc.moveDown(1);
+
     doc
       .font("Helvetica-Bold")
-      .fontSize(10)
+      .fontSize(9)
       .text("Ali Haider's Creation", { align: "center" });
 
     doc
       .font("Helvetica")
-      .fontSize(10)
+      .fontSize(9)
       .text("0304-1275276", { align: "center" });
 
     doc.end();
