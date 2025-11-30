@@ -6,7 +6,12 @@ const billStatusSchema = new mongoose.Schema({
   year: Number,
   billStatus: Boolean,
   paymentMethod: String,
-  paymentNote: String
+  paymentNote: String,
+  billReceivedAt: {
+  type: Date,
+  default: null
+}
+
 }, { timestamps: true });
 
 module.exports = mongoose.model('BillStatus', billStatusSchema);
