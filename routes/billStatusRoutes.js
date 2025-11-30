@@ -74,5 +74,52 @@ router.patch("/mark-unpaid/:id", async (req, res) => {
   }
 });
 
+// Mark as paid (safe - no duplicates)
+router.patch("/mark-paid", async (req, res) => {
+  try {
+    const { customerId, month, year, paymentMethod, paymentNote } = req.body;
+
+    // check if exists
+    let existing = await BillStatus.findOne({ customerId, month, year });
+
+    if (existing) {
+      existing.billStatus = true;
+      existing.paymentMethod = paymentMethod || existing.paymentMethod;
+      existing.paymentNote = paymentNote || existing.paymentNote;
+      existing.billReceivedAt = new Date();       // stamp date
+      existing.updatedAt = new Date();            // update date
+
+      await existing.save();
+
+      return res.json({
+        success: true,
+        message: "Bill marked as PAID (updated existing document)",
+        billStatus: existing,
+      });
+    }
+
+    // else create new
+    const newRecord = await BillStatus.create({
+      customerId,
+      month,
+      year,
+      billStatus: true,
+      paymentMethod,
+      paymentNote,
+      billReceivedAt: new Date(),
+    });
+
+    return res.json({
+      success: true,
+      message: "Bill marked as PAID (new document created)",
+      billStatus: newRecord,
+    });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 
 module.exports = router;
