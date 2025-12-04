@@ -22,8 +22,8 @@ const additionalChargeSchema = new mongoose.Schema(
       default: false,
     },
 
-    month: Number, // optional if attached to next month
-    year: Number,  // optional if attached to next month
+    month: Number,
+    year: Number,
 
     createdAt: {
       type: Date,
