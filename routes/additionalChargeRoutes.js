@@ -161,6 +161,25 @@ router.delete("/customer/:customerId", async (req, res) => {
   }
 });
 
+// GET /api/charges/customer/:customerId
+router.get("/customer/:customerId", async (req, res) => {
+  try {
+    const { customerId } = req.params;
+
+    const record = await AdditionalCharge.findOne({ customerId });
+
+    if (!record) {
+      return res.json({ success: true, data: null });
+    }
+
+    return res.json({ success: true, data: record });
+
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+
 
 // ----------------------------
 // POST /api/charges/generate-pdf
