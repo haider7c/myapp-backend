@@ -3,79 +3,135 @@ const router = express.Router();
 const PDFDocument = require("pdfkit");
 const fs = require("fs");
 const path = require("path");
+
 const AdditionalCharge = require("../models/AdditionalCharge");
-const axios = require("axios");
+const Customer = require("../models/Customer");
 
-const WHATSAPP_API = "https://myapp-backend-nrka.onrender.com/api/whatsapp/send-document";
+const createWhatsAppService = require("../services/whatsappService");
 
-// =============================
-// GENERATE PDF + SAVE + SEND
-// =============================
-router.post("/generate-pdf", async (req, res) => {
+// Shared WhatsApp instance
+const whatsappServicePromise = createWhatsAppService();
+
+// Create temp folder if missing
+const tempDir = path.join(__dirname, "../temp");
+if (!fs.existsSync(tempDir)) {
+  fs.mkdirSync(tempDir, { recursive: true });
+}
+
+/*
+|--------------------------------------------------------------------------
+| 1️⃣ SAVE Additional Charges
+|--------------------------------------------------------------------------
+*/
+router.post("/add", async (req, res) => {
   try {
-    const { customerName, customerId, charges, total } = req.body;
-
-    if (!customerName || !customerId || !charges || charges.length === 0) {
-      return res.status(400).json({ success: false, error: "Invalid data" });
-    }
-
-    // 1) SAVE RECORD IN DATABASE
-    const record = await AdditionalCharge.create({
-      customerId: req.body.customerObjectId, // optional
+    const {
+      customerObjectId,
+      customerId,
       customerName,
-      customerUid: customerId,
+      phone,
       charges,
       total,
-    });
+      includeInNextBill,
+    } = req.body;
 
-    // 2) GENERATE PDF
-    const pdfName = `Charge-${customerId}-${Date.now()}.pdf`;
-    const pdfPath = path.join(__dirname, "../temp", pdfName);
-
-    const doc = new PDFDocument();
-    doc.pipe(fs.createWriteStream(pdfPath));
-
-    doc.fontSize(20).text("Additional Charges Receipt", { align: "center" });
-    doc.moveDown();
-    doc.fontSize(14).text(`Customer: ${customerName}`);
-    doc.text(`ID: ${customerId}`);
-    doc.text(`Date: ${new Date().toLocaleDateString()}`);
-    doc.moveDown();
-
-    doc.fontSize(16).text("Charges:");
-    charges.forEach((c) => {
-      doc.text(`• ${c.title} — Rs. ${c.amount}`);
-    });
-
-    doc.moveDown();
-    doc.fontSize(18).text(`Total: Rs. ${total}`);
-
-    doc.end();
-
-    // Save PDF path in DB
-    record.pdfPath = pdfPath;
-    record.pdfName = pdfName;
-    await record.save();
-
-    // 3) SEND DOCUMENT TO CUSTOMER
-    const formattedPhone = "92" + req.body.phone?.slice(1); // if needed
-
-    await axios.post(WHATSAPP_API, {
-      phone: formattedPhone,
-      filePath: pdfPath,
-      fileName: pdfName,
+    const charge = await AdditionalCharge.create({
+      customerId: customerObjectId,
+      charges,
+      totalAmount: total,
+      includeInNextBill,
     });
 
     res.json({
       success: true,
-      message: "PDF created & sent via WhatsApp",
-      recordId: record._id,
-      fileName: pdfName,
-      filePath: pdfPath,
+      message: "Additional charge saved",
+      charge,
+    });
+  } catch (err) {
+    console.error("ADD ERROR:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/*
+|--------------------------------------------------------------------------
+| 2️⃣ Generate PDF + Send via WhatsApp
+|--------------------------------------------------------------------------
+*/
+router.post("/generate-pdf", async (req, res) => {
+  try {
+    const service = await whatsappServicePromise;
+
+    const {
+      customerId,
+      customerName,
+      customerUid,
+      phone,
+      charges,
+      total,
+    } = req.body;
+
+    if (!phone) throw new Error("Customer phone not provided");
+
+    // -------------------------------
+    // Create PDF file
+    // -------------------------------
+    const fileName = `additional_charge_${Date.now()}.pdf`;
+    const filePath = path.join(tempDir, fileName);
+
+    const doc = new PDFDocument({ margin: 40 });
+    const stream = fs.createWriteStream(filePath);
+    doc.pipe(stream);
+
+    doc.fontSize(18).text("Additional Charges Invoice", { align: "center" });
+    doc.moveDown();
+
+    doc.fontSize(12).text(`Customer: ${customerName}`);
+    doc.text(`Customer ID: ${customerUid}`);
+    doc.text(`Phone: ${phone}`);
+    doc.moveDown();
+
+    doc.text("Charges:");
+    doc.moveDown(0.3);
+
+    charges.forEach((item) => {
+      doc.text(`• ${item.title}: Rs ${item.amount}`);
+    });
+
+    doc.moveDown();
+    doc.text(`Total Additional Charges: Rs ${total}`, { bold: true });
+
+    doc.end();
+
+    // When PDF is finished writing
+    stream.on("finish", async () => {
+      try {
+        // -------------------------------
+        // Send PDF to WhatsApp
+        // -------------------------------
+        await service.sendDocument(phone, filePath, fileName);
+
+        res.json({
+          success: true,
+          message: "PDF generated and sent successfully",
+          filePath,
+          fileName,
+        });
+      } catch (err) {
+        console.error("WhatsApp Send Error:", err.message);
+        res.status(500).json({
+          success: false,
+          error: "PDF generated but failed to send via WhatsApp",
+        });
+      }
+    });
+
+    stream.on("error", (err) => {
+      res.status(500).json({ success: false, error: err.message });
     });
 
   } catch (err) {
-    console.error("PDF Error:", err);
+    console.error("PDF ERROR:", err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
