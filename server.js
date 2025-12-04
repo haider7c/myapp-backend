@@ -31,6 +31,8 @@ app.use("/api/packages", require("./routes/packageRoutes"));
 app.use("/api/bills", require("./routes/billRoutes"));
 app.use("/api/counters", require("./routes/counterRoutes"));
 app.use("/api/receipt", require("./routes/receiptRoutes"));
+app.use("/api/charges", require("./routes/additionalChargeRoutes"));
+
 
 app.get("/health", (req, res) => {
   res.status(200).send("OK");
