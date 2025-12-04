@@ -53,6 +53,114 @@ router.post("/add", async (req, res) => {
     return res.status(500).json({ success: false, error: err.message });
   }
 });
+// GET /api/charges/all
+router.get("/all", async (req, res) => {
+  try {
+    const records = await AdditionalCharge.find().sort({ createdAt: -1 });
+    res.json({ success: true, data: records });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+  
+// PUT /api/charges/customer/:customerId
+router.put("/customer/:customerId", async (req, res) => {
+  try {
+    const { customerId } = req.params;
+    const { charges, includeInNextBill, month, year } = req.body;
+
+    const updated = await AdditionalCharge.findOneAndUpdate(
+      { customerId },
+      {
+        charges,
+        totalAmount: charges?.reduce((sum, c) => sum + (c.amount || 0), 0) || 0,
+        includeInNextBill,
+        month,
+        year
+      },
+      { new: true }
+    );
+
+    if (!updated) {
+      return res.status(404).json({ success: false, error: "Record not found" });
+    }
+
+    res.json({ success: true, message: "Updated successfully", data: updated });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+// POST /api/charges/customer/:customerId/add-charge
+router.post("/customer/:customerId/add-charge", async (req, res) => {
+  try {
+    const { customerId } = req.params;
+    const { title, amount } = req.body;
+
+    const updated = await AdditionalCharge.findOneAndUpdate(
+      { customerId },
+      {
+        $push: { charges: { title, amount } }
+      },
+      { new: true }
+    );
+
+    if (!updated) {
+      return res.status(404).json({ success: false, error: "Record not found" });
+    }
+
+    res.json({ success: true, message: "Charge added", data: updated });
+
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// DELETE /api/charges/customer/:customerId/charge/:chargeId
+router.delete("/customer/:customerId/charge/:chargeId", async (req, res) => {
+  try {
+    const { customerId, chargeId } = req.params;
+
+    const updated = await AdditionalCharge.findOneAndUpdate(
+      { customerId },
+      { $pull: { charges: { _id: chargeId } } },
+      { new: true }
+    );
+
+    if (!updated) {
+      return res.status(404).json({ success: false, error: "Charge not found" });
+    }
+
+    // recalc total
+    updated.totalAmount = updated.charges.reduce(
+      (sum, c) => sum + (c.amount || 0),
+      0
+    );
+    await updated.save();
+
+    res.json({ success: true, message: "Charge deleted", data: updated });
+
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+// DELETE /api/charges/customer/:customerId
+router.delete("/customer/:customerId", async (req, res) => {
+  try {
+    const { customerId } = req.params;
+
+    const deleted = await AdditionalCharge.findOneAndDelete({ customerId });
+
+    if (!deleted) {
+      return res.status(404).json({ success: false, error: "Record not found" });
+    }
+
+    res.json({ success: true, message: "Record deleted", data: deleted });
+
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 
 // ----------------------------
 // POST /api/charges/generate-pdf
