@@ -1,4 +1,3 @@
-// backend/routes/additionalChargeRoutes.js
 const express = require("express");
 const router = express.Router();
 const PDFDocument = require("pdfkit");
@@ -9,51 +8,50 @@ const AdditionalCharge = require("../models/AdditionalCharge");
 const createWhatsAppService = require("../services/whatsappService");
 const whatsappServicePromise = createWhatsAppService();
 
-// Create /temp folder if missing
+// TEMP FOLDER
 const tempDir = path.join(__dirname, "../temp");
-if (!fs.existsSync(tempDir)) {
-  fs.mkdirSync(tempDir, { recursive: true });
-}
+if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 
-// A7 exact size for invoice
-const A7_WIDTH = 2.9 * 72; // 209 pts
-const A7_HEIGHT = 3.7 * 72; // 266 pts
+const A7_WIDTH = 2.9 * 72;
+const A7_HEIGHT = 3.7 * 72;
 
-// ----------------------------
-// POST /api/charges/add
-// Save an additional charge record (no PDF sending)
-// ----------------------------
-router.post("/add", async (req, res) => {
+// -------------------------------
+// SAVE OR UPDATE (MAIN LOGIC)
+// -------------------------------
+router.post("/save-or-update", async (req, res) => {
   try {
-    const {
-      customerObjectId, // prefer actual MongoDB _id
-      charges,
-      total,
-      includeInNextBill = false,
-      month = null,
-      year = null,
-    } = req.body;
+    const { customerObjectId, charges, total, includeInNextBill } = req.body;
 
-    if (!customerObjectId) {
-      return res.status(400).json({ success: false, error: "customerObjectId is required" });
+    if (!customerObjectId)
+      return res.status(400).json({ success: false, error: "customerObjectId required" });
+
+    let record = await AdditionalCharge.findOne({ customerId: customerObjectId });
+
+    if (record) {
+      record.charges = charges;
+      record.totalAmount = total;
+      record.includeInNextBill = includeInNextBill;
+      await record.save();
+
+      return res.json({ success: true, updated: true, data: record });
     }
 
-    const saved = await AdditionalCharge.create({
+    const created = await AdditionalCharge.create({
       customerId: customerObjectId,
-      charges: charges || [],
-      totalAmount: total || 0,
-      includeInNextBill,
-      month,
-      year,
+      charges,
+      totalAmount: total,
+      includeInNextBill
     });
 
-    return res.json({ success: true, message: "Additional charge saved", data: saved });
+    return res.json({ success: true, created: true, data: created });
   } catch (err) {
-    console.error("ADD CHARGE ERROR:", err);
     return res.status(500).json({ success: false, error: err.message });
   }
 });
-// GET /api/charges/all
+
+// -------------------------------
+// GET ALL
+// -------------------------------
 router.get("/all", async (req, res) => {
   try {
     const records = await AdditionalCharge.find().sort({ createdAt: -1 });
@@ -62,60 +60,22 @@ router.get("/all", async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 });
-  
-// PUT /api/charges/customer/:customerId
-router.put("/customer/:customerId", async (req, res) => {
+
+// -------------------------------
+// GET SPECIFIC CUSTOMER
+// -------------------------------
+router.get("/customer/:customerId", async (req, res) => {
   try {
-    const { customerId } = req.params;
-    const { charges, includeInNextBill, month, year } = req.body;
-
-    const updated = await AdditionalCharge.findOneAndUpdate(
-      { customerId },
-      {
-        charges,
-        totalAmount: charges?.reduce((sum, c) => sum + (c.amount || 0), 0) || 0,
-        includeInNextBill,
-        month,
-        year
-      },
-      { new: true }
-    );
-
-    if (!updated) {
-      return res.status(404).json({ success: false, error: "Record not found" });
-    }
-
-    res.json({ success: true, message: "Updated successfully", data: updated });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-// POST /api/charges/customer/:customerId/add-charge
-router.post("/customer/:customerId/add-charge", async (req, res) => {
-  try {
-    const { customerId } = req.params;
-    const { title, amount } = req.body;
-
-    const updated = await AdditionalCharge.findOneAndUpdate(
-      { customerId },
-      {
-        $push: { charges: { title, amount } }
-      },
-      { new: true }
-    );
-
-    if (!updated) {
-      return res.status(404).json({ success: false, error: "Record not found" });
-    }
-
-    res.json({ success: true, message: "Charge added", data: updated });
-
+    const record = await AdditionalCharge.findOne({ customerId: req.params.customerId });
+    res.json({ success: true, data: record || null });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// DELETE /api/charges/customer/:customerId/charge/:chargeId
+// -------------------------------
+// DELETE SINGLE CHARGE
+// -------------------------------
 router.delete("/customer/:customerId/charge/:chargeId", async (req, res) => {
   try {
     const { customerId, chargeId } = req.params;
@@ -126,97 +86,70 @@ router.delete("/customer/:customerId/charge/:chargeId", async (req, res) => {
       { new: true }
     );
 
-    if (!updated) {
+    if (!updated)
       return res.status(404).json({ success: false, error: "Charge not found" });
-    }
 
-    // recalc total
-    updated.totalAmount = updated.charges.reduce(
-      (sum, c) => sum + (c.amount || 0),
-      0
-    );
+    updated.totalAmount = updated.charges.reduce((s, c) => s + (c.amount || 0), 0);
     await updated.save();
 
-    res.json({ success: true, message: "Charge deleted", data: updated });
-
+    res.json({ success: true, data: updated });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
-// DELETE /api/charges/customer/:customerId
+
+// -------------------------------
+// DELETE FULL RECORD
+// -------------------------------
 router.delete("/customer/:customerId", async (req, res) => {
   try {
-    const { customerId } = req.params;
+    const deleted = await AdditionalCharge.findOneAndDelete({
+      customerId: req.params.customerId,
+    });
 
-    const deleted = await AdditionalCharge.findOneAndDelete({ customerId });
-
-    if (!deleted) {
+    if (!deleted)
       return res.status(404).json({ success: false, error: "Record not found" });
-    }
 
-    res.json({ success: true, message: "Record deleted", data: deleted });
-
+    res.json({ success: true, data: deleted });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// GET /api/charges/customer/:customerId
-router.get("/customer/:customerId", async (req, res) => {
-  try {
-    const { customerId } = req.params;
-
-    const record = await AdditionalCharge.findOne({ customerId });
-
-    if (!record) {
-      return res.json({ success: true, data: null });
-    }
-
-    return res.json({ success: true, data: record });
-
-  } catch (err) {
-    return res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-
-
-// ----------------------------
-// POST /api/charges/generate-pdf
-// Save record, create PDF, send via WhatsApp
-// ----------------------------
+// -------------------------------
+// GENERATE PDF — SEND WHATSAPP — UPDATE RECORD (NO DUPLICATE)
+// -------------------------------
 router.post("/generate-pdf", async (req, res) => {
   try {
     const service = await whatsappServicePromise;
 
-    const {
-      customerName,
-      customerId,
-      customerUid,
-      customerObjectId,
-      phone,
-      charges = [],
-      total = 0,
-    } = req.body;
+    const { customerName, customerId, customerObjectId, phone, charges, total } = req.body;
 
-    if (!customerObjectId && !customerId) {
-      return res.status(400).json({ success: false, error: "customerObjectId or customerId required" });
+    if (!customerObjectId)
+      return res.status(400).json({ success: false, error: "customerObjectId required" });
+
+    if (!phone)
+      return res.status(400).json({ success: false, error: "phone required" });
+
+    // Update or Create
+    let record = await AdditionalCharge.findOne({ customerId: customerObjectId });
+
+    if (record) {
+      record.charges = charges;
+      record.totalAmount = total;
+      record.includeInNextBill = false;
+      await record.save();
+    } else {
+      record = await AdditionalCharge.create({
+        customerId: customerObjectId,
+        charges,
+        totalAmount: total,
+        includeInNextBill: false,
+      });
     }
 
-    if (!phone) {
-      return res.status(400).json({ success: false, error: "phone is required for WhatsApp sending" });
-    }
-
-    // 1) Save record in DB (so both buttons persist)
-    const saved = await AdditionalCharge.create({
-      customerId: customerObjectId || null,
-      charges,
-      totalAmount: total,
-      includeInNextBill: false,
-    });
-
-    // 2) Build PDF
-    const fileName = `additional_charges_${Date.now()}.pdf`;
+    // PDF generation
+    const fileName = `additional_${Date.now()}.pdf`;
     const filePath = path.join(tempDir, fileName);
 
     const doc = new PDFDocument({
@@ -227,80 +160,37 @@ router.post("/generate-pdf", async (req, res) => {
     const stream = fs.createWriteStream(filePath);
     doc.pipe(stream);
 
-    // Header
-    doc.font("Helvetica-Bold").fontSize(14).text("Additional Charges", { align: "center" }).moveDown(0.7);
-    doc.fontSize(10).font("Helvetica");
+    doc.font("Helvetica-Bold").fontSize(14).text("Additional Charges", { align: "center" });
+    doc.moveDown(1);
 
-    // Helper for rows
-    const addRow = (label, value) => {
-      const y = doc.y;
-      doc.text(label, 14, y, { width: 80 });
-      doc.text(value, 0, y, { width: A7_WIDTH - 28, align: "right" });
-      doc.moveDown(0.45);
+    const addLine = (k, v) => {
+      doc.font("Helvetica").fontSize(10);
+      doc.text(`${k}: ${v}`);
+      doc.moveDown(0.4);
     };
 
-    // Customer Info
-    addRow("Customer", customerName || "N/A");
-    addRow("ID", customerUid || customerId || "N/A");
-    addRow("Phone", phone || "N/A");
+    addLine("Customer", customerName);
+    addLine("ID", customerId);
+    addLine("Phone", phone);
 
-    // Charges header with left padding and bottom padding
-    doc.moveDown(0.6);
-    doc.font("Helvetica-Bold").fontSize(11).text("Charges:", 22, doc.y, { underline: true });
     doc.moveDown(0.5);
-    doc.font("Helvetica").fontSize(10);
+    doc.font("Helvetica-Bold").text("Charges:");
+    doc.moveDown(0.5);
 
-    // Charges list
-    (charges || []).forEach((c) => {
-      const title = c.title || "Item";
-      const amount = (c.amount || 0);
-      addRow(title, `Rs. ${amount}`);
-    });
+    charges.forEach((c) => addLine(c.title, `Rs. ${c.amount}`));
 
-    doc.moveDown(0.6);
-    addRow("Total", `Rs. ${total}`);
-
-    // Footer
-    doc.moveDown(1);
-    doc.font("Helvetica-Bold").fontSize(9).text("Ali Haider's Creation", { align: "center" });
-    doc.font("Helvetica").fontSize(9).text("0304-1275276", { align: "center" });
+    doc.moveDown(0.5);
+    addLine("Total", `Rs. ${total}`);
 
     doc.end();
 
-    // 3) When PDF finished, send it via WhatsApp using service.sendDocument
     stream.on("finish", async () => {
-      try {
-        // service.sendDocument expects normalized phone and filesystem-accessible path
-        await service.sendDocument(phone, filePath, fileName);
-
-        // respond with DB record + file info
-        return res.json({
-          success: true,
-          message: "PDF generated, saved in DB & sent via WhatsApp",
-          dbRecord: saved,
-          filePath,
-          fileName,
-        });
-      } catch (err) {
-        console.error("WHATSAPP SEND ERROR:", err);
-        return res.status(500).json({
-          success: false,
-          error: "PDF created but failed to send via WhatsApp: " + err.message,
-          dbRecord: saved,
-          filePath,
-          fileName,
-        });
-      }
-    });
-
-    stream.on("error", (err) => {
-      console.error("PDF STREAM ERROR:", err);
-      return res.status(500).json({ success: false, error: err.message });
+      await service.sendDocument(phone, filePath, fileName);
+      return res.json({ success: true, message: "PDF sent", data: record });
     });
 
   } catch (err) {
-    console.error("GENERATE-PDF ROUTE ERROR:", err);
-    return res.status(500).json({ success: false, error: err.message });
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
