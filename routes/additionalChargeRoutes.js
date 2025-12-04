@@ -43,7 +43,7 @@ router.post("/generate-pdf", async (req, res) => {
     const fileName = `additional_charges_${Date.now()}.pdf`;
     const filePath = path.join(tempDir, fileName);
 
-    // Create PDF (A7 style like your receipt)
+    // Create PDF (A7)
     const doc = new PDFDocument({
       size: [A7_WIDTH, A7_HEIGHT],
       margins: { top: 10, left: 14, right: 14, bottom: 10 }
@@ -52,7 +52,9 @@ router.post("/generate-pdf", async (req, res) => {
     const stream = fs.createWriteStream(filePath);
     doc.pipe(stream);
 
+    // ==========================
     // HEADER
+    // ==========================
     doc
       .font("Helvetica-Bold")
       .fontSize(14)
@@ -61,29 +63,42 @@ router.post("/generate-pdf", async (req, res) => {
 
     doc.fontSize(10).font("Helvetica");
 
-    // Helper for two-column layout
+    // Helper for two-column rows
     const addRow = (label, value) => {
       const y = doc.y;
 
       doc.text(label, 14, y, { width: 80 });
-
       doc.text(value, 0, y, {
         width: A7_WIDTH - 28,
-        align: "right"
+        align: "right",
       });
 
       doc.moveDown(0.45);
     };
 
-    // BODY
+    // ==========================
+    // CUSTOMER INFO
+    // ==========================
     addRow("Customer", customerName);
     addRow("ID", customerUid || customerId);
     addRow("Phone", phone);
 
+    // ==========================
+    // CHARGES HEADER
+    // ==========================
     doc.moveDown(0.6);
-    doc.font("Helvetica-Bold").text("Charges:", { underline: true });
-    doc.font("Helvetica");
 
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(11)
+      .text("Charges:", 22, doc.y, { underline: true }); // left padding added
+
+    doc.moveDown(0.5); // space under header
+    doc.font("Helvetica").fontSize(10);
+
+    // ==========================
+    // CHARGES LIST
+    // ==========================
     charges.forEach((c) => {
       addRow(c.title, `Rs. ${c.amount}`);
     });
@@ -91,7 +106,9 @@ router.post("/generate-pdf", async (req, res) => {
     doc.moveDown(0.8);
     addRow("Total", `Rs. ${total}`);
 
+    // ==========================
     // FOOTER
+    // ==========================
     doc.moveDown(1);
 
     doc
@@ -106,7 +123,9 @@ router.post("/generate-pdf", async (req, res) => {
 
     doc.end();
 
-    // SEND PDF via WhatsApp
+    // ==========================
+    // SEND PDF VIA WHATSAPP
+    // ==========================
     stream.on("finish", async () => {
       try {
         await service.sendDocument(phone, filePath, fileName);
