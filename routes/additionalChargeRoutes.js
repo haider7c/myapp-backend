@@ -4,58 +4,22 @@ const PDFDocument = require("pdfkit");
 const fs = require("fs");
 const path = require("path");
 
-const AdditionalCharge = require("../models/AdditionalCharge");
-const Customer = require("../models/Customer");
-
 const createWhatsAppService = require("../services/whatsappService");
-
-// Shared WhatsApp instance
 const whatsappServicePromise = createWhatsAppService();
 
-// Create temp folder if missing
+// Create /temp folder if missing
 const tempDir = path.join(__dirname, "../temp");
 if (!fs.existsSync(tempDir)) {
   fs.mkdirSync(tempDir, { recursive: true });
 }
 
-/*
-|--------------------------------------------------------------------------
-| 1️⃣ SAVE Additional Charges
-|--------------------------------------------------------------------------
-*/
-router.post("/add", async (req, res) => {
-  try {
-    const {
-      customerObjectId,
-      customerId,
-      customerName,
-      phone,
-      charges,
-      total,
-      includeInNextBill,
-    } = req.body;
-
-    const charge = await AdditionalCharge.create({
-      customerId: customerObjectId,
-      charges,
-      totalAmount: total,
-      includeInNextBill,
-    });
-
-    res.json({
-      success: true,
-      message: "Additional charge saved",
-      charge,
-    });
-  } catch (err) {
-    console.error("ADD ERROR:", err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
+// A7 exact size for invoice
+const A7_WIDTH = 2.9 * 72;   // 209 pts
+const A7_HEIGHT = 3.7 * 72;  // 266 pts
 
 /*
 |--------------------------------------------------------------------------
-| 2️⃣ Generate PDF + Send via WhatsApp
+| 1️⃣ Generate Additional Charges PDF + Send via WhatsApp
 |--------------------------------------------------------------------------
 */
 router.post("/generate-pdf", async (req, res) => {
@@ -63,65 +27,100 @@ router.post("/generate-pdf", async (req, res) => {
     const service = await whatsappServicePromise;
 
     const {
-      customerId,
       customerName,
+      customerId,
       customerUid,
       phone,
       charges,
-      total,
+      total
     } = req.body;
 
-    if (!phone) throw new Error("Customer phone not provided");
+    if (!phone) {
+      return res.status(400).json({ success: false, error: "Phone missing" });
+    }
 
-    // -------------------------------
-    // Create PDF file
-    // -------------------------------
-    const fileName = `additional_charge_${Date.now()}.pdf`;
+    // PDF Name & Path
+    const fileName = `additional_charges_${Date.now()}.pdf`;
     const filePath = path.join(tempDir, fileName);
 
-    const doc = new PDFDocument({ margin: 40 });
+    // Create PDF (A7 style like your receipt)
+    const doc = new PDFDocument({
+      size: [A7_WIDTH, A7_HEIGHT],
+      margins: { top: 10, left: 14, right: 14, bottom: 10 }
+    });
+
     const stream = fs.createWriteStream(filePath);
     doc.pipe(stream);
 
-    doc.fontSize(18).text("Additional Charges Invoice", { align: "center" });
-    doc.moveDown();
+    // HEADER
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(14)
+      .text("Additional Charges", { align: "center" })
+      .moveDown(0.7);
 
-    doc.fontSize(12).text(`Customer: ${customerName}`);
-    doc.text(`Customer ID: ${customerUid}`);
-    doc.text(`Phone: ${phone}`);
-    doc.moveDown();
+    doc.fontSize(10).font("Helvetica");
 
-    doc.text("Charges:");
-    doc.moveDown(0.3);
+    // Helper for two-column layout
+    const addRow = (label, value) => {
+      const y = doc.y;
 
-    charges.forEach((item) => {
-      doc.text(`• ${item.title}: Rs ${item.amount}`);
+      doc.text(label, 14, y, { width: 80 });
+
+      doc.text(value, 0, y, {
+        width: A7_WIDTH - 28,
+        align: "right"
+      });
+
+      doc.moveDown(0.45);
+    };
+
+    // BODY
+    addRow("Customer", customerName);
+    addRow("ID", customerUid || customerId);
+    addRow("Phone", phone);
+
+    doc.moveDown(0.6);
+    doc.font("Helvetica-Bold").text("Charges:", { underline: true });
+    doc.font("Helvetica");
+
+    charges.forEach((c) => {
+      addRow(c.title, `Rs. ${c.amount}`);
     });
 
-    doc.moveDown();
-    doc.text(`Total Additional Charges: Rs ${total}`, { bold: true });
+    doc.moveDown(0.8);
+    addRow("Total", `Rs. ${total}`);
+
+    // FOOTER
+    doc.moveDown(1);
+
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(9)
+      .text("Ali Haider's Creation", { align: "center" });
+
+    doc
+      .font("Helvetica")
+      .fontSize(9)
+      .text("0304-1275276", { align: "center" });
 
     doc.end();
 
-    // When PDF is finished writing
+    // SEND PDF via WhatsApp
     stream.on("finish", async () => {
       try {
-        // -------------------------------
-        // Send PDF to WhatsApp
-        // -------------------------------
         await service.sendDocument(phone, filePath, fileName);
 
         res.json({
           success: true,
-          message: "PDF generated and sent successfully",
+          message: "PDF generated & sent successfully",
           filePath,
-          fileName,
+          fileName
         });
       } catch (err) {
-        console.error("WhatsApp Send Error:", err.message);
         res.status(500).json({
           success: false,
-          error: "PDF generated but failed to send via WhatsApp",
+          error: "PDF created but failed to send via WhatsApp: " + err.message
         });
       }
     });
@@ -131,7 +130,6 @@ router.post("/generate-pdf", async (req, res) => {
     });
 
   } catch (err) {
-    console.error("PDF ERROR:", err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
