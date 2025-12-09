@@ -8,7 +8,7 @@ require("dotenv").config();
 const app = express();
 app.use(cors());
 app.use(express.json());
-app.use(express.urlencoded({extended: true}))
+app.use(express.urlencoded({ extended: true }));
 
 // =====================
 // DATABASE CONNECT
@@ -19,6 +19,7 @@ mongoose
   .connect(process.env.MONGODB_URI)
   .then(() => console.log("✅ MongoDB connected"))
   .catch((err) => console.error("❌ MongoDB error:", err));
+
 
 // =====================
 // ROUTES
@@ -33,17 +34,17 @@ app.use("/api/counters", require("./routes/counterRoutes"));
 app.use("/api/receipt", require("./routes/receiptRoutes"));
 app.use("/api/charges", require("./routes/additionalChargeRoutes"));
 
+app.get("/health", (req, res) => res.status(200).send("OK"));
 
-app.get("/health", (req, res) => {
-  res.status(200).send("OK");
-});
-
-
-
+// Default route
+app.get("/", (req, res) => res.json({ message: "API OK" }));
 
 
 // =====================
-app.get("/", (req, res) => res.json({ message: "API OK" }));
+// CRON JOBS (AUTO REMINDER SYSTEM)
+// =====================
+require("./cron/reminderScheduler");
+
 
 // =====================
 // START SERVER
