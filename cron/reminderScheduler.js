@@ -3,26 +3,32 @@ const axios = require("axios");
 const Customer = require("../models/Customer");
 const BillStatus = require("../models/BillStatus");
 
-const WHATSAPP_STATUS_URL = "https://myapp-backend-nrka.onrender.com/api/whatsapp/status";
-const WHATSAPP_SEND_URL = "https://myapp-backend-nrka.onrender.com/api/whatsapp/send";
+const WHATSAPP_STATUS_URL =
+  "https://myapp-backend-nrka.onrender.com/api/whatsapp/status";
+const WHATSAPP_SEND_URL =
+  "https://myapp-backend-nrka.onrender.com/api/whatsapp/send";
 
 let sentToday = new Set();
+
+// Utility sleep function (1 minute delay)
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function resetDaily() {
   sentToday = new Set();
 }
 
-// Check if WhatsApp is connected
+// Check WhatsApp connection
 async function isWhatsAppConnected() {
   try {
     const res = await axios.get(WHATSAPP_STATUS_URL, { timeout: 8000 });
     return res.data?.isConnected === true;
   } catch (err) {
-    console.log("❌ Could not check WhatsApp status:", err.message);
+    console.log("❌ WhatsApp status check failed:", err.message);
     return false;
   }
 }
 
+// Check payment status
 async function isCustomerPaid(customerId) {
   const month = new Date().getMonth() + 1;
   const year = new Date().getFullYear();
@@ -36,6 +42,7 @@ async function isCustomerPaid(customerId) {
   return bill?.billStatus === true;
 }
 
+// Get bill day
 function getBillDay(customer) {
   let billDay = customer.billReceiveDate;
 
@@ -52,21 +59,16 @@ function getBillDay(customer) {
 // DAILY REMINDER JOB — runs at 12:01 AM every day
 // ====================================================
 cron.schedule("1 0 * * *", async () => {
-  console.log("⏳ Running daily reminder job (12:01 AM)...");
-
+  console.log("⏳ Running daily reminder job (12:01 AM)");
   resetDaily();
 
   const today = new Date().getDate();
   const targetDay = today + 3;
 
-  // -------------------------------
-  // 🔴 STEP 1: Check WhatsApp Status
-  // -------------------------------
-  const connected = await isWhatsAppConnected();
-
-  if (!connected) {
-    console.log("⛔ WhatsApp is NOT connected. Stopping reminder sending...");
-    return; // EXIT JOB SAFELY
+  // Stop if WhatsApp not connected
+  if (!(await isWhatsAppConnected())) {
+    console.log("⛔ WhatsApp not connected. Job stopped.");
+    return;
   }
 
   try {
@@ -75,27 +77,25 @@ cron.schedule("1 0 * * *", async () => {
     for (const customer of customers) {
       const custId = customer._id.toString();
 
+      // Skip invalid cases
       if (customer.status === "discontinued") continue;
+      if (sentToday.has(custId)) continue;
       if (await isCustomerPaid(custId)) continue;
 
       const billDay = getBillDay(customer);
-
       if (billDay !== targetDay) continue;
-      if (sentToday.has(custId)) continue;
+
+      // Check connection before EACH send
+      if (!(await isWhatsAppConnected())) {
+        console.log("⛔ WhatsApp disconnected mid-job. Stopping.");
+        return;
+      }
 
       const message = `Dear ${customer.customerName}, your ${
         customer.packageName || "package"
       } will expire in 3 days (day ${billDay}). Please renew to avoid interruption.`;
 
-      // -------------------------------
-      // 🔴 STEP 2: Check connection AGAIN before sending
-      // -------------------------------
-      if (!(await isWhatsAppConnected())) {
-        console.log("⛔ WhatsApp disconnected during job. Stopping...");
-        return;
-      }
-
-      // 1st message
+      // ✅ SEND ONLY ONCE
       await axios.post(WHATSAPP_SEND_URL, {
         phone: customer.phone,
         message,
@@ -105,21 +105,13 @@ cron.schedule("1 0 * * *", async () => {
 
       sentToday.add(custId);
 
-      // Send again in 1 minute
-      setTimeout(async () => {
-        if (await isWhatsAppConnected()) {
-          await axios.post(WHATSAPP_SEND_URL, {
-            phone: customer.phone,
-            message,
-          });
-
-          console.log(`⏱ Sent second reminder to ${customer.customerName}`);
-        } else {
-          console.log("⛔ WhatsApp disconnected — second message skipped.");
-        }
-      }, 60 * 1000);
+      // ✅ WAIT 1 MINUTE BEFORE NEXT CUSTOMER
+      console.log("⏱ Waiting 1 minute before next customer...");
+      await sleep(60 * 1000);
     }
+
+    console.log("✅ Daily reminder job completed.");
   } catch (err) {
-    console.error("❌ Error in reminder job:", err);
+    console.error("❌ Reminder job error:", err);
   }
 });
