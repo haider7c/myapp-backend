@@ -39,13 +39,32 @@ router.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    const user = await User.findOne({ email });
-    if (!user)
-      return res.status(401).json({ message: "Invalid credentials" });
+    // ✅ HARD VALIDATION
+    if (!email || !password) {
+      return res.status(400).json({
+        message: "Email and password are required",
+      });
+    }
 
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch)
-      return res.status(401).json({ message: "Invalid credentials" });
+    const user = await User.findOne({ email });
+
+    if (!user || !user.password) {
+      return res.status(401).json({
+        message: "Invalid credentials",
+      });
+    }
+
+    // ✅ bcrypt safe check
+    const isMatch = await bcrypt.compare(
+      String(password),
+      String(user.password)
+    );
+
+    if (!isMatch) {
+      return res.status(401).json({
+        message: "Invalid credentials",
+      });
+    }
 
     const token = jwt.sign(
       {
@@ -57,7 +76,7 @@ router.post("/login", async (req, res) => {
       { expiresIn: process.env.JWT_EXPIRE }
     );
 
-    res.json({
+    return res.json({
       success: true,
       token,
       user: {
@@ -68,8 +87,12 @@ router.post("/login", async (req, res) => {
       },
     });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    console.error("LOGIN ERROR:", err);
+    return res.status(500).json({
+      message: "Server error during login",
+    });
   }
 });
+
 
 module.exports = router;
