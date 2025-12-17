@@ -168,6 +168,18 @@ router.delete("/:id", async (req, res) => {
   }
 });
 
+// Employee view
+router.get("/my", auth, async (req, res) => {
+  if (req.user.role !== "employee") {
+    return res.status(403).json({ message: "Employee only" });
+  }
+
+  const customers = await Customer.find({
+    areaId: { $in: req.user.assignedAreas },
+  });
+
+  res.json(customers);
+});
 
 
 

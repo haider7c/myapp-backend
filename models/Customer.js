@@ -44,6 +44,18 @@ const customerSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    areaId: {
+  type: mongoose.Schema.Types.ObjectId,
+  ref: "Area",
+  required: true,
+},
+
+serviceId: {
+  type: mongoose.Schema.Types.ObjectId,
+  ref: "Service",
+  required: true,
+},
+
   },
   { timestamps: true }
 );

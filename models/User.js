@@ -24,12 +24,20 @@ const userSchema = new mongoose.Schema(
       required: true,
     },
 
-    // If role === employee → this links employee to owner
+    // If role === employee → link to owner
     ownerId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       default: null,
     },
+
+    // 🔑 NEW: Areas assigned to employee
+    assignedAreas: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Area",
+      },
+    ],
 
     isActive: {
       type: Boolean,
