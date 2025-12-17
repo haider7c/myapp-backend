@@ -1,6 +1,8 @@
 const express = require("express");
 const router = express.Router();
 const Customer = require("../models/Customer");
+const auth = require("../middleware/auth");
+
 
 // =============================
 // GET ACTIVE CUSTOMERS
@@ -167,20 +169,24 @@ router.delete("/:id", async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 });
-
-// Employee view
+// =============================
+// EMPLOYEE: GET MY CUSTOMERS
+// =============================
 router.get("/my", auth, async (req, res) => {
-  if (req.user.role !== "employee") {
-    return res.status(403).json({ message: "Employee only" });
+  try {
+    if (req.user.role !== "employee") {
+      return res.status(403).json({ message: "Employee only" });
+    }
+
+    const customers = await Customer.find({
+      areaId: { $in: req.user.assignedAreas },
+    });
+
+    res.json(customers);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
   }
-
-  const customers = await Customer.find({
-    areaId: { $in: req.user.assignedAreas },
-  });
-
-  res.json(customers);
 });
-
 
 
 module.exports = router;
