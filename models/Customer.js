@@ -3,31 +3,43 @@ const mongoose = require("mongoose");
 const customerSchema = new mongoose.Schema(
   {
     serialNumber: String,
-    customerName: String,
-    phone: String,
+    customerName: { type: String, required: true },
+    phone: { type: String, required: true },
     address: String,
     cnic: String,
     regDate: Date,
-    billReceiveDate: Number,
+    billReceiveDate: { type: Number, required: true },
     customerId: String,
     email: String,
     synced: Boolean,
-    packageName: String,
-    amount: Number,
 
-    // 🔑 NEW FIELDS (IMPORTANT)
+    packageName: { type: String, required: true },
+    amount: { type: Number, required: true },
+
+    // 🔐 MULTI-TENANCY (VERY IMPORTANT)
     ownerId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
+      index: true,
     },
 
+    // 📍 AREA
     areaId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Area",
       required: true,
+      index: true,
     },
 
+    // 🏢 SERVICE (Cybernet, Nayatel etc.)
+    serviceId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Service",
+      required: true,
+    },
+
+    // 👷 Assigned employee (optional)
     assignedEmployeeId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -44,18 +56,6 @@ const customerSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
-    areaId: {
-  type: mongoose.Schema.Types.ObjectId,
-  ref: "Area",
-  required: true,
-},
-
-serviceId: {
-  type: mongoose.Schema.Types.ObjectId,
-  ref: "Service",
-  required: true,
-},
-
   },
   { timestamps: true }
 );
