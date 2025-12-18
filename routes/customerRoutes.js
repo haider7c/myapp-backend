@@ -117,14 +117,24 @@ router.get("/:id", async (req, res) => {
 // Create CUSTOMER (SINGLE ADDING ROUTE)
 // =============================
 
-router.post("/", async (req, res) => {
+router.post("/", auth, async (req, res) => {
   try {
-    const customer = await Customer.create(req.body);
+    const ownerId =
+      req.user.role === "owner"
+        ? req.user.id
+        : req.user.ownerId;
+
+    const customer = await Customer.create({
+      ...req.body,
+      ownerId, // 🔥 REQUIRED FIX
+    });
+
     res.json(customer);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
+
 
 // =============================
 // UPDATE CUSTOMER
