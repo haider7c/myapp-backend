@@ -114,27 +114,81 @@ router.get("/:id", async (req, res) => {
 });
 
 // =============================
-// Create CUSTOMER (SINGLE ADDING ROUTE)
+// Create CUSTOMER
 // =============================
-
 router.post("/", auth, async (req, res) => {
   try {
-    const ownerId =
-      req.user.role === "owner"
-        ? req.user.id
-        : req.user.ownerId;
-
-    const customer = await Customer.create({
+    console.log("User data from token:", req.user); // Debug log
+    
+    // Get ownerId based on user role
+    let ownerId;
+    
+    if (req.user.role === "owner") {
+      ownerId = req.user.id;
+    } else if (req.user.role === "employee" && req.user.ownerId) {
+      ownerId = req.user.ownerId;
+    } else {
+      // Fallback: try to get from body or use user id
+      ownerId = req.body.ownerId || req.user.id;
+    }
+    
+    console.log("Extracted ownerId:", ownerId); // Debug log
+    
+    // Validate required fields
+    if (!ownerId) {
+      return res.status(400).json({ 
+        message: "ownerId is required. Please provide a valid owner." 
+      });
+    }
+    
+    // Validate areaId and serviceId
+    if (!req.body.areaId) {
+      return res.status(400).json({ message: "areaId is required" });
+    }
+    
+    if (!req.body.serviceId) {
+      return res.status(400).json({ message: "serviceId is required" });
+    }
+    
+    // Create customer with ownerId
+    const customerData = {
       ...req.body,
-      ownerId, // 🔥 REQUIRED FIX
+      ownerId: ownerId, // Ensure ownerId is included
+    };
+    
+    console.log("Creating customer with data:", customerData); // Debug log
+    
+    const customer = await Customer.create(customerData);
+    
+    res.status(201).json({
+      message: "Customer created successfully",
+      customer
     });
-
-    res.json(customer);
+    
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    console.error("Customer creation error:", err); // Detailed error log
+    
+    // Handle specific Mongoose validation errors
+    if (err.name === 'ValidationError') {
+      const errors = Object.values(err.errors).map(e => e.message);
+      return res.status(400).json({ 
+        message: "Validation Error", 
+        errors 
+      });
+    }
+    
+    // Handle duplicate key errors
+    if (err.code === 11000) {
+      return res.status(400).json({ 
+        message: "Duplicate entry. Customer with this phone or CNIC already exists." 
+      });
+    }
+    
+    res.status(500).json({ 
+      message: err.message || "Server error creating customer" 
+    });
   }
 });
-
 
 // =============================
 // UPDATE CUSTOMER
