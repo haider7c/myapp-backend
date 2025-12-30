@@ -3,13 +3,15 @@ const router = express.Router();
 const Customer = require("../models/Customer");
 const auth = require("../middleware/auth");
 
-
 // =============================
 // GET ACTIVE CUSTOMERS
 // =============================
 router.get("/active", async (req, res) => {
   try {
-    const customers = await Customer.find({ status: "active" });
+    const customers = await Customer.find({ status: "active" })
+      .populate("areaId", "name")
+      .populate("serviceId", "name")
+      .populate("assignedEmployeeId", "name");
     res.json(customers);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -21,10 +23,87 @@ router.get("/active", async (req, res) => {
 // =============================
 router.get("/discontinued", async (req, res) => {
   try {
-    const customers = await Customer.find({ status: "discontinued" });
+    const customers = await Customer.find({ status: "discontinued" })
+      .populate("areaId", "name")
+      .populate("serviceId", "name")
+      .populate("assignedEmployeeId", "name");
     res.json(customers);
   } catch (error) {
     res.status(500).json({ message: error.message });
+  }
+});
+
+// =============================
+// GET BY BILL DATE OR ALL
+// =============================
+router.get("/", async (req, res) => {
+  try {
+    const { date } = req.query;
+    let customers;
+
+    if (date) {
+      const selectedDate = new Date(date);
+      const nextDate = new Date(selectedDate);
+      nextDate.setDate(selectedDate.getDate() + 1);
+
+      customers = await Customer.find({
+        billReceiveDate: { $gte: selectedDate, $lt: nextDate },
+      })
+        .populate("areaId", "name")
+        .populate("serviceId", "name")
+        .populate("assignedEmployeeId", "name");
+    } else {
+      customers = await Customer.find()
+        .populate("areaId", "name")
+        .populate("serviceId", "name")
+        .populate("assignedEmployeeId", "name");
+    }
+
+    res.json(customers);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// =============================
+// GET ONE CUSTOMER
+// =============================
+router.get("/:id", async (req, res) => {
+  try {
+    const customer = await Customer.findById(req.params.id)
+      .populate("areaId", "name")
+      .populate("serviceId", "name")
+      .populate("assignedEmployeeId", "name");
+    
+    if (!customer) {
+      return res.status(404).json({ message: "Customer not found" });
+    }
+    
+    res.json(customer);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// =============================
+// EMPLOYEE: GET MY CUSTOMERS
+// =============================
+router.get("/my", auth, async (req, res) => {
+  try {
+    if (req.user.role !== "employee") {
+      return res.status(403).json({ message: "Employee only" });
+    }
+
+    const customers = await Customer.find({
+      areaId: { $in: req.user.assignedAreas },
+    })
+      .populate("areaId", "name")
+      .populate("serviceId", "name")
+      .populate("assignedEmployeeId", "name");
+
+    res.json(customers);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
   }
 });
 
@@ -40,7 +119,10 @@ router.put("/:id/discontinue", async (req, res) => {
         discontinuedAt: new Date(),
       },
       { new: true }
-    );
+    )
+      .populate("areaId", "name")
+      .populate("serviceId", "name")
+      .populate("assignedEmployeeId", "name");
 
     res.json({
       message: "Customer discontinued successfully",
@@ -60,10 +142,13 @@ router.put("/:id/reactivate", async (req, res) => {
       req.params.id,
       {
         status: "active",
-        discontinuedAt: null, // <-- RESET discontinued date/time
+        discontinuedAt: null,
       },
       { new: true }
-    );
+    )
+      .populate("areaId", "name")
+      .populate("serviceId", "name")
+      .populate("assignedEmployeeId", "name");
 
     res.json({
       message: "Customer reactivated successfully",
@@ -75,52 +160,12 @@ router.put("/:id/reactivate", async (req, res) => {
 });
 
 // =============================
-// GET BY BILL DATE OR ALL
-// (THIS MUST BE LAST!)
-// =============================
-router.get("/", async (req, res) => {
-  try {
-    const { date } = req.query;
-    let customers;
-
-    if (date) {
-      const selectedDate = new Date(date);
-      const nextDate = new Date(selectedDate);
-      nextDate.setDate(selectedDate.getDate() + 1);
-
-      customers = await Customer.find({
-        billReceiveDate: { $gte: selectedDate, $lt: nextDate },
-      });
-    } else {
-      customers = await Customer.find();
-    }
-
-    res.json(customers);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
-
-// =============================
-// GET ONE CUSTOMER (LAST ROUTE)
-// =============================
-router.get("/:id", async (req, res) => {
-  try {
-    const customer = await Customer.findById(req.params.id);
-    res.json(customer);
-  } catch (err) {
-    res.status(404).json({ message: "Customer not found" });
-  }
-});
-
-// =============================
 // Create CUSTOMER
 // =============================
 router.post("/", auth, async (req, res) => {
   try {
-    console.log("User data from token:", req.user); // Debug log
+    console.log("User data from token:", req.user);
     
-    // Get ownerId based on user role
     let ownerId;
     
     if (req.user.role === "owner") {
@@ -128,20 +173,17 @@ router.post("/", auth, async (req, res) => {
     } else if (req.user.role === "employee" && req.user.ownerId) {
       ownerId = req.user.ownerId;
     } else {
-      // Fallback: try to get from body or use user id
       ownerId = req.body.ownerId || req.user.id;
     }
     
-    console.log("Extracted ownerId:", ownerId); // Debug log
+    console.log("Extracted ownerId:", ownerId);
     
-    // Validate required fields
     if (!ownerId) {
       return res.status(400).json({ 
         message: "ownerId is required. Please provide a valid owner." 
       });
     }
     
-    // Validate areaId and serviceId
     if (!req.body.areaId) {
       return res.status(400).json({ message: "areaId is required" });
     }
@@ -150,25 +192,29 @@ router.post("/", auth, async (req, res) => {
       return res.status(400).json({ message: "serviceId is required" });
     }
     
-    // Create customer with ownerId
     const customerData = {
       ...req.body,
-      ownerId: ownerId, // Ensure ownerId is included
+      ownerId: ownerId,
     };
     
-    console.log("Creating customer with data:", customerData); // Debug log
+    console.log("Creating customer with data:", customerData);
     
     const customer = await Customer.create(customerData);
     
+    // Populate the created customer before sending response
+    const populatedCustomer = await Customer.findById(customer._id)
+      .populate("areaId", "name")
+      .populate("serviceId", "name")
+      .populate("assignedEmployeeId", "name");
+    
     res.status(201).json({
       message: "Customer created successfully",
-      customer
+      customer: populatedCustomer
     });
     
   } catch (err) {
-    console.error("Customer creation error:", err); // Detailed error log
+    console.error("Customer creation error:", err);
     
-    // Handle specific Mongoose validation errors
     if (err.name === 'ValidationError') {
       const errors = Object.values(err.errors).map(e => e.message);
       return res.status(400).json({ 
@@ -177,7 +223,6 @@ router.post("/", auth, async (req, res) => {
       });
     }
     
-    // Handle duplicate key errors
     if (err.code === 11000) {
       return res.status(400).json({ 
         message: "Duplicate entry. Customer with this phone or CNIC already exists." 
@@ -199,7 +244,10 @@ router.put("/:id", async (req, res) => {
       req.params.id,
       req.body,
       { new: true }
-    );
+    )
+      .populate("areaId", "name")
+      .populate("serviceId", "name")
+      .populate("assignedEmployeeId", "name");
 
     if (!updatedCustomer) {
       return res.status(404).json({ message: "Customer not found" });
@@ -233,24 +281,5 @@ router.delete("/:id", async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 });
-// =============================
-// EMPLOYEE: GET MY CUSTOMERS
-// =============================
-router.get("/my", auth, async (req, res) => {
-  try {
-    if (req.user.role !== "employee") {
-      return res.status(403).json({ message: "Employee only" });
-    }
-
-    const customers = await Customer.find({
-      areaId: { $in: req.user.assignedAreas },
-    });
-
-    res.json(customers);
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
-
 
 module.exports = router;
