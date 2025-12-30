@@ -22,17 +22,27 @@ router.get("/", auth, async (req, res) => {
     // Role-based filtering
     if (req.user.role === "employee") {
       // Employee can only see customers in their assigned areas
+      // Check if assignedAreas exists and is not empty
+      if (!req.user.assignedAreas || req.user.assignedAreas.length === 0) {
+        return res.json([]); // Return empty array if no areas assigned
+      }
       query.areaId = { $in: req.user.assignedAreas };
     }
     // Owner can see all (no additional filter)
+
+    console.log("User role:", req.user.role);
+    console.log("Assigned areas:", req.user.assignedAreas);
+    console.log("Query:", query);
 
     const customers = await Customer.find(query)
       .populate("areaId", "name")
       .populate("serviceId", "name")
       .populate("assignedEmployeeId", "name");
 
+    console.log("Found customers:", customers.length);
     res.json(customers);
   } catch (error) {
+    console.error("Error fetching customers:", error);
     res.status(500).json({ message: error.message });
   }
 });
