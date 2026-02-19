@@ -27,8 +27,8 @@ router.post("/generate-receipt", async (req, res) => {
       receivingDate,
       paymentNote,
       collectedBy = "Admin",
-      companyName = "M-R FIBERNET SERVICE",
-      companyPhone = "0308-7509860",
+      companyName = "INTERNETWORKS FIBERNET",
+      companyPhone = "0304-1275276",
     } = req.body;
 
     const billNo = Date.now().toString().slice(-12);
