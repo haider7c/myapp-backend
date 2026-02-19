@@ -27,7 +27,7 @@ router.post("/generate-receipt", async (req, res) => {
       receivingDate,
       paymentNote,
       collectedBy = "Admin",
-      companyName = "INTERNETWORKS FIBERNET",
+      companyName = "INTERNETWORKS",
       companyPhone = "0304-1275276",
     } = req.body;
 
@@ -46,10 +46,10 @@ router.post("/generate-receipt", async (req, res) => {
     // =======================
     // LOGO
     // =======================
-    if (fs.existsSync(logoPath)) {
-      doc.image(logoPath, WIDTH / 2 - 20, 12, { width: 40 });
-      doc.moveDown(2.2);
-    }
+    // if (fs.existsSync(logoPath)) {
+    //   doc.image(logoPath, WIDTH / 2 - 20, 12, { width: 40 });
+    //   doc.moveDown(2.2);
+    // }
 
     // =======================
     // HEADER
