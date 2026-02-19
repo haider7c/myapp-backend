@@ -13,7 +13,7 @@ const logoPath = path.join(__dirname, "../assets/logo.png");
 
 // A7 / Thermal compatible size
 const WIDTH = 2.9 * 72;
-const HEIGHT = 6.2 * 72;
+const HEIGHT = 5.2 * 72;
 
 router.post("/generate-receipt", async (req, res) => {
   try {
