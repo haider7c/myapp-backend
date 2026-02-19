@@ -4,122 +4,195 @@ const router = express.Router();
 const PDFDocument = require("pdfkit");
 const fs = require("fs");
 const path = require("path");
+const QRCode = require("qrcode");
 
-// Create /temp folder if missing
 const tempDir = path.join(__dirname, "../temp");
-if (!fs.existsSync(tempDir)) {
-  fs.mkdirSync(tempDir, { recursive: true });
-}
+if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 
-// A7 exact size
-const A7_WIDTH = 2.9 * 72;   // 209 pts
-const A7_HEIGHT = 3.7 * 72;  // 266 pts
+const logoPath = path.join(__dirname, "../assets/logo.png");
+
+// A7 / Thermal compatible size
+const WIDTH = 2.9 * 72;
+const HEIGHT = 4.2 * 72;
 
 router.post("/generate-receipt", async (req, res) => {
   try {
     const {
       customerName,
       phone,
-      cnic,
       packageName,
       amount,
       paymentMethod,
-      paymentNote,
       billDate,
       receivingDate,
-      billStatus
+      paymentNote,
+      collectedBy = "Admin",
+      companyName = "M-R FIBERNET SERVICE",
+      companyPhone = "0308-7509860",
     } = req.body;
 
-    const fileName = `receipt_${Date.now()}.pdf`;
+    const billNo = Date.now().toString().slice(-12);
+    const fileName = `receipt_${billNo}.pdf`;
     const filePath = path.join(tempDir, fileName);
 
     const doc = new PDFDocument({
-      size: [A7_WIDTH, A7_HEIGHT],
-      margins: { top: 10, left: 14, right: 14, bottom: 10 }
+      size: [WIDTH, HEIGHT],
+      margins: { top: 12, left: 14, right: 14, bottom: 10 },
     });
 
     const stream = fs.createWriteStream(filePath);
     doc.pipe(stream);
 
-    // ==============================
+    // =======================
+    // LOGO
+    // =======================
+    if (fs.existsSync(logoPath)) {
+      doc.image(logoPath, WIDTH / 2 - 20, 12, { width: 40 });
+      doc.moveDown(2.2);
+    }
+
+    // =======================
     // HEADER
-    // ==============================
+    // =======================
     doc
       .font("Helvetica-Bold")
-      .fontSize(14)
-      .text("Billing Receipt", { align: "center" })
-      .moveDown(0.7);
+      .fontSize(12)
+      .text(companyName, { align: "center" });
 
-    // Smaller font for body
-    doc.fontSize(10).font("Helvetica");
+    doc.fontSize(8).font("Helvetica").text(companyPhone, { align: "center" });
 
-    // Helper for two-column rows
-    const addRow = (label, value) => {
+    // Divider
+    doc
+      .moveDown(0.4)
+      .rect(14, doc.y, WIDTH - 28, 1)
+      .fill("#ff6600")
+      .moveDown(0.6);
+    doc.fillColor("black");
+
+    const row = (label, value, color = "black") => {
       const y = doc.y;
+      doc
+        .font("Helvetica-Bold")
+        .fillColor("black")
+        .text(label + " :", 14, y);
+      doc
+        .font("Helvetica")
+        .fillColor(color)
+        .text(value || "-", 85, y);
+      doc.moveDown(0.35);
+    };
 
-      doc.text(label, 14, y, { width: 80 });
+    // =======================
+    // INFO
+    // =======================
+    row("Bill No", billNo);
+    row("Name", customerName);
+    row("User ID", customerName?.replace(/\s/g, ""));
+    row("Mobile", phone);
+    row("Due Date", billDate);
+    row("Package", packageName);
+    row("Fee", amount);
+    row("Prev Balance", "0");
 
-      doc.text(value, 0, y, {
-        width: A7_WIDTH - 28,
-        align: "right"
+    // =======================
+    // TOTAL
+    // =======================
+    doc.moveDown(0.3);
+    doc
+      .fillColor("#2b7cd3")
+      .fontSize(11)
+      .font("Helvetica-Bold")
+      .text(`Total Bill : ${amount}`, { align: "center" });
+
+    // =======================
+    // PAID BOX
+    // =======================
+    doc.moveDown(0.4);
+    const boxW = WIDTH - 60;
+    const boxX = (WIDTH - boxW) / 2;
+    const boxY = doc.y;
+
+    doc.roundedRect(boxX, boxY, boxW, 24, 6).stroke("#4CAF50");
+
+    doc
+      .fillColor("#4CAF50")
+      .fontSize(13)
+      .font("Helvetica-Bold")
+      .text(`PAID : ${amount}`, boxX, boxY + 6, {
+        width: boxW,
+        align: "center",
       });
 
-      doc.moveDown(0.45);
-    };
+    doc.moveDown(1.8);
 
-    // Mask CNIC (### except last digit)
-    const maskCNIC = (cnicVal) => {
-      if (!cnicVal) return "N/A";
-      const d = cnicVal.replace(/\D/g, "");
-      if (d.length === 0) return "N/A";
-      return d.slice(0, -1).replace(/\d/g, "#") + d.slice(-1);
-    };
+    // =======================
+    // PAYMENT DETAILS
+    // =======================
+    doc.fontSize(8).fillColor("black");
 
-    // ==============================
-    // BODY CONTENT (Two columns)
-    // ==============================
-    addRow("Name", customerName);
-    addRow("Phone", phone);
-    addRow("CNIC", maskCNIC(cnic));
-    addRow("Package", packageName);
-    addRow("Amount", `Rs. ${amount}`);
-    addRow("Status", billStatus ? "Unpaid" : "Paid");
-    addRow("Method", paymentMethod || "N/A");
+    row("Remaining", "0");
+    row("Paid Via", paymentMethod, "#0a8f3c");
+    row("Collected", collectedBy, "#8e44ad");
+    row("Date", receivingDate);
+    row("Time", new Date().toLocaleTimeString());
 
-    if (paymentNote) addRow("Note", paymentNote);
+    if (paymentNote) row("Note", paymentNote, "#16a085");
 
-    addRow("Bill Date", billDate);
-    addRow("Receiving Date", receivingDate);
-
-    // ==============================
-    // FOOTER
-    // ==============================
-    doc.moveDown(1);
-
+    // =======================
+    // URDU THANK YOU
+    // =======================
+    doc.moveDown(0.3);
     doc
+      .fontSize(8)
+      .fillColor("#0a8f3c")
+      .text("شکریہ — آپ کی ادائیگی موصول ہو گئی", { align: "center" });
+
+    // =======================
+    // QR CODE (VERIFY)
+    // =======================
+    const qrText = `Bill:${billNo} | ${customerName} | Paid:${amount}`;
+    const qr = await QRCode.toDataURL(qrText);
+
+    const qrImg = qr.replace(/^data:image\/png;base64,/, "");
+    const qrBuffer = Buffer.from(qrImg, "base64");
+
+    doc.image(qrBuffer, WIDTH / 2 - 18, doc.y + 5, { width: 36 });
+
+    doc.moveDown(2.5);
+
+    // =======================
+    // PAID STAMP
+    // =======================
+    const cx = WIDTH / 2;
+    const cy = doc.y + 5;
+
+    doc.circle(cx, cy, 11).stroke("#4CAF50");
+    doc
+      .fillColor("#4CAF50")
+      .fontSize(7)
       .font("Helvetica-Bold")
-      .fontSize(9)
-      .text("Ali Haider's Creation", { align: "center" });
+      .text("PAID", cx - 9, cy - 3);
 
+    doc.moveDown(2);
+
+    // =======================
+    // FOOTER
+    // =======================
     doc
-      .font("Helvetica")
-      .fontSize(9)
-      .text("0304-1275276", { align: "center" });
+      .fontSize(6)
+      .fillColor("#777")
+      .text("Computer generated receipt — No signature required", {
+        align: "center",
+      });
 
     doc.end();
 
     stream.on("finish", () => {
       res.json({ success: true, filePath, fileName });
     });
-
-    stream.on("error", (err) => {
-      res.status(500).json({ success: false, error: err.message });
-    });
-
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
 module.exports = router;
-

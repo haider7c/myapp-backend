@@ -17,6 +17,42 @@ function resetDaily() {
   sentToday = new Set();
 }
 
+// Get month name in Urdu
+const getMonthName = (month) => {
+  const months = [
+    "جنوری",
+    "فروری",
+    "مارچ",
+    "اپریل",
+    "مئی",
+    "جون",
+    "جولائی",
+    "اگست",
+    "ستمبر",
+    "اکتوبر",
+    "نومبر",
+    "دسمبر",
+  ];
+  return months[month - 1] || "";
+};
+
+// Format due date in Urdu
+const formatDueDate = (customer, billDay) => {
+  const today = new Date().getDate();
+  const currentMonth = new Date().getMonth() + 1;
+  const currentYear = new Date().getFullYear();
+
+  if (billDay > today) {
+    return `${billDay} ${getMonthName(currentMonth)} ${currentYear}`;
+  } else {
+    // If bill day has passed this month, it's for next month
+    const nextMonth = currentMonth + 1;
+    const year = nextMonth > 12 ? currentYear + 1 : currentYear;
+    const month = nextMonth > 12 ? 1 : nextMonth;
+    return `${billDay} ${getMonthName(month)} ${year}`;
+  }
+};
+
 // Check WhatsApp connection
 async function isWhatsAppConnected() {
   try {
@@ -56,6 +92,76 @@ function getBillDay(customer) {
 }
 
 // ====================================================
+// URDU MESSAGE TEMPLATES
+// ====================================================
+const MESSAGE_TEMPLATES = {
+  IN_3_DAYS: (customer, billDay) => {
+    const monthlyBill = customer.amount || 0;
+    const dueDate = formatDueDate(customer, billDay);
+
+    let totalText = "";
+    if (customer.amount) {
+      totalText = `\n\n💰 *بل کی رقم*: *Rs ${monthlyBill}*`;
+    }
+
+    return (
+      `🛜 *ASSALAM-O-ALAIKUM* 🛜\n\n` +
+      `*${customer.customerName}* صاحب!\n\n` +
+      `آپ کا *ماہانہ انٹرنیٹ بل* ۳ دن میں *مقررہ تاریخ* ہے:\n\n` +
+      totalText +
+      `\n\n📆 *بل ادا کرنے کی آخری تاریخ*:\n` +
+      `*${dueDate}*` +
+      `\n\n⚠️ *اہم تنبیہ*:\n` +
+      `براہ کرم مقررہ تاریخ سے پہلے بل ادا کر دیں تاکہ آپ کا انٹرنیٹ کنکشن متاثر نہ ہو۔` +
+      `\n\n💳 *بل ادائیگی کے طریقے*:\n` +
+      `\n📱 *جیز کیس | ایزی پیسا*:\n` +
+      `• علی حیدر - *03041275276*` +
+      `\n\n🆕 *نیا پیے (Nayapay)*:\n` +
+      `• علی حیدر - *03281615276*` +
+      `\n\n🏦 *راست (Raast)*:\n` +
+      `• علی حیدر - *03041275276*` +
+      `\n\n📲 *رابطہ نمبرات*:\n` +
+      `👤 علی حسین: *03041275276*\n` +
+      `👤 علی حیدر: *03281615276*` +
+      `\n\n✅ *بل ادا کرنے کے بعد*\n` +
+      `براہ کرم رسید کی تصویر واٹس ایپ پر بھیج دیں تاکہ آپ کا ریکارڈ اپڈیٹ کیا جا سکے۔` +
+      `\n\n📌 *نوٹ*:\n` +
+      `اگر آپ اس ماہ کا بل ادا کر چکے ہیں تو اسے نظر انداز کر دیں۔ شکریہ` +
+      `\n\n*INTERNETWORKS*` +
+      `\n*آپ کا اعتماد ہماری پہچان* 🌟` +
+      `\n\n*شکریہ*`
+    );
+  },
+
+  GENERIC: (customer, daysUntil, billDay) => {
+    const monthlyBill = customer.amount || 0;
+    const dueDate = formatDueDate(customer, billDay);
+
+    return (
+      `🛜 *ASSALAM-O-ALAIKUM* 🛜\n\n` +
+      `*${customer.customerName}* صاحب!\n\n` +
+      `آپ کا ماہانہ انٹرنیٹ بل *${daysUntil} دن* میں مقررہ تاریخ ہے۔\n\n` +
+      `💰 *بل کی رقم*: *Rs ${monthlyBill}*` +
+      `\n\n📆 *بل ادا کرنے کی آخری تاریخ*:\n` +
+      `*${dueDate}*` +
+      `\n\n⚠️ *اہم تنبیہ*:\n` +
+      `براہ کرم مقررہ تاریخ سے پہلے بل ادا کر دیں۔` +
+      `\n\n💳 *بل ادائیگی کے طریقے*:\n` +
+      `\n📱 *جیز کیس | ایزی پیسا*:\n` +
+      `• علی حیدر - *03041275276*` +
+      `\n\n📲 *رابطہ نمبرات*:\n` +
+      `👤 علی حسین: *03041275276*\n` +
+      `👤 علی حیدر: *03281615276*` +
+      `\n\n📌 *نوٹ*:\n` +
+      `اگر آپ اس ماہ کا بل ادا کر چکے ہیں تو اسے نظر انداز کر دیں۔ شکریہ` +
+      `\n\n*INTERNETWORKS*` +
+      `\n*آپ کا اعتماد ہماری پہچان* 🌟` +
+      `\n\n*شکریہ*`
+    );
+  },
+};
+
+// ====================================================
 // DAILY REMINDER JOB — runs at 12:01 AM every day
 // ====================================================
 cron.schedule("1 0 * * *", async () => {
@@ -91,9 +197,8 @@ cron.schedule("1 0 * * *", async () => {
         return;
       }
 
-      const message = `Dear ${customer.customerName}, your ${
-        customer.packageName || "package"
-      } will expire in 3 days (day ${billDay}). Please renew to avoid interruption.`;
+      // ✅ Urdu message for 3 days reminder
+      const message = MESSAGE_TEMPLATES.IN_3_DAYS(customer, billDay);
 
       // ✅ SEND ONLY ONCE
       await axios.post(WHATSAPP_SEND_URL, {
@@ -101,7 +206,9 @@ cron.schedule("1 0 * * *", async () => {
         message,
       });
 
-      console.log(`📩 Sent reminder to ${customer.customerName}`);
+      console.log(
+        `📩 Urdu reminder sent to ${customer.customerName} (موبائل: ${customer.phone})`,
+      );
 
       sentToday.add(custId);
 
