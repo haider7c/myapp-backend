@@ -20,7 +20,6 @@ mongoose
   .then(() => console.log("✅ MongoDB connected"))
   .catch((err) => console.error("❌ MongoDB error:", err));
 
-
 // =====================
 // ROUTES
 // =====================
@@ -37,21 +36,17 @@ app.use("/api/auth", require("./routes/authRoutes"));
 app.use("/api/services", require("./routes/serviceRoutes"));
 app.use("/api/areas", require("./routes/areaRoutes"));
 app.use("/api/employees", require("./routes/employeeRoutes"));
-
-
-
+app.use("/api/mikrotik", require("./routes/mikrotikRoutes"));
 
 app.get("/health", (req, res) => res.status(200).send("OK"));
 
 // Default route
 app.get("/", (req, res) => res.json({ message: "API OK" }));
 
-
 // =====================
 // CRON JOBS (AUTO REMINDER SYSTEM)
 // =====================
 require("./cron/reminderScheduler");
-
 
 // =====================
 // START SERVER
