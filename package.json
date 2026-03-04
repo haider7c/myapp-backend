@@ -19,7 +19,6 @@
     "express": "^4.18.2",
     "jsonwebtoken": "^9.0.3",
     "mikronode": "^2.3.5",
-    "mikronode-ng": "^1.0.11",
     "mongoose": "^7.5.0",
     "node-cron": "^4.2.1",
     "pdfkit": "^0.17.2",

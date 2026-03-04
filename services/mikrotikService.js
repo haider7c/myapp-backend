@@ -1,25 +1,5 @@
 // services/mikrotikService.js
-let MikroNode;
-
-// Try different import methods
-try {
-  // Try the default require
-  MikroNode = require("mikronode-ng");
-  console.log("✅ mikronode-ng loaded successfully");
-} catch (err) {
-  console.error("❌ Failed to load mikronode-ng:", err.message);
-
-  // Try alternative import
-  try {
-    MikroNode = require("mikronode-ng").default;
-    console.log("✅ mikronode-ng loaded with .default");
-  } catch (err2) {
-    console.error("❌ Alternative import also failed:", err2.message);
-    throw new Error(
-      "MikroNode package not found. Run: npm install mikronode-ng",
-    );
-  }
-}
+const MikroNode = require("mikronode");
 
 const host = process.env.MT_HOST;
 const port = parseInt(process.env.MT_PORT) || 2222;
@@ -37,156 +17,111 @@ async function connect() {
   try {
     console.log(`Connecting to MikroTik at ${host}:${port}...`);
 
-    // Check if MikroNode is properly initialized
-    if (typeof MikroNode !== "function") {
-      throw new Error(
-        "MikroNode is not a constructor. Package may be corrupted.",
-      );
-    }
-
-    const device = new MikroNode(host, port);
-
-    // Add connection timeout
-    const connection = await device.connect(user, pass, {
-      timeout: 10000, // 10 seconds timeout
+    const connection = MikroNode.getConnection(host, port, user, pass, {
+      timeout: 10000,
     });
 
-    console.log("✅ Connected to MikroTik");
-    return connection;
+    // Wait for connection to be established
+    return new Promise((resolve, reject) => {
+      connection.on("error", (err) => {
+        console.error("Connection error:", err);
+        reject(err);
+      });
+
+      connection.on("connected", () => {
+        console.log("✅ Connected to MikroTik");
+        resolve(connection);
+      });
+
+      // Set timeout
+      setTimeout(() => {
+        reject(new Error("Connection timeout"));
+      }, 10000);
+    });
   } catch (error) {
     console.error("❌ MikroTik connection error:", error.message);
-    console.error("Full error:", error);
     throw new Error(`Failed to connect to MikroTik: ${error.message}`);
   }
 }
 
 async function getPPPoEUsers() {
-  let conn = null;
+  let connection = null;
   try {
-    conn = await connect();
-    const chan = await conn.openChannel();
-
-    const users = [];
+    connection = await connect();
 
     return new Promise((resolve, reject) => {
-      // Write command
-      chan.write("/ppp/secret/print");
-
-      chan.on("data", (data) => {
-        console.log("Received data:", data ? "yes" : "no");
-        users.push(data);
-      });
-
-      chan.on("done", () => {
-        console.log("Command done, closing connection");
-        conn.close();
-        resolve(users);
-      });
-
-      chan.on("error", (err) => {
-        console.error("Channel error:", err);
-        conn.close();
-        reject(err);
-      });
-
-      chan.on("close", () => {
-        console.log("Channel closed");
+      connection.get("/ppp/secret/print", (err, data) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(data || []);
+        }
+        connection.close();
       });
 
       // Set timeout
       setTimeout(() => {
-        console.log("Command timeout");
-        conn.close();
+        connection.close();
         reject(new Error("MikroTik command timeout"));
       }, 15000);
     });
   } catch (error) {
     console.error("Error in getPPPoEUsers:", error);
-    if (conn) {
-      try {
-        conn.close();
-      } catch (e) {}
-    }
+    if (connection) connection.close();
     throw error;
   }
 }
 
 async function getActiveUsers() {
-  let conn = null;
+  let connection = null;
   try {
-    conn = await connect();
-    const chan = await conn.openChannel();
-
-    const users = [];
+    connection = await connect();
 
     return new Promise((resolve, reject) => {
-      chan.write("/ppp/active/print");
-
-      chan.on("data", (data) => {
-        users.push(data);
-      });
-
-      chan.on("done", () => {
-        conn.close();
-        resolve(users);
-      });
-
-      chan.on("error", (err) => {
-        conn.close();
-        reject(err);
+      connection.get("/ppp/active/print", (err, data) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(data || []);
+        }
+        connection.close();
       });
 
       setTimeout(() => {
-        conn.close();
+        connection.close();
         reject(new Error("MikroTik command timeout"));
       }, 15000);
     });
   } catch (error) {
-    if (conn) {
-      try {
-        conn.close();
-      } catch (e) {}
-    }
+    console.error("Error in getActiveUsers:", error);
+    if (connection) connection.close();
     throw error;
   }
 }
 
 async function testConnection() {
-  let conn = null;
+  let connection = null;
   try {
-    conn = await connect();
-    const chan = await conn.openChannel();
+    connection = await connect();
 
     return new Promise((resolve, reject) => {
-      chan.write("/system/identity/print");
-
-      let identity = null;
-      chan.on("data", (data) => {
-        identity = data;
-        console.log("MikroTik identity:", data);
-      });
-
-      chan.on("done", () => {
-        conn.close();
-        resolve(identity);
-      });
-
-      chan.on("error", (err) => {
-        conn.close();
-        reject(err);
+      connection.get("/system/identity/print", (err, data) => {
+        if (err) {
+          reject(err);
+        } else {
+          console.log("MikroTik identity:", data);
+          resolve(data);
+        }
+        connection.close();
       });
 
       setTimeout(() => {
-        conn.close();
+        connection.close();
         reject(new Error("Connection test timeout"));
       }, 10000);
     });
   } catch (error) {
-    if (conn) {
-      try {
-        conn.close();
-      } catch (e) {}
-    }
+    if (connection) connection.close();
     throw error;
   }
 }
