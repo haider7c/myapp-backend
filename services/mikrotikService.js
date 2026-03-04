@@ -1,5 +1,5 @@
 // services/mikrotikService.js
-const MikroNode = require("mikronode");
+const { RouterOSAPI } = require("node-routeros");
 
 const host = process.env.MT_HOST;
 const port = parseInt(process.env.MT_PORT) || 2222;
@@ -13,31 +13,27 @@ if (!host || !user || !pass) {
   );
 }
 
+let connection = null;
+
 async function connect() {
   try {
     console.log(`Connecting to MikroTik at ${host}:${port}...`);
 
-    const connection = MikroNode.getConnection(host, port, user, pass, {
+    // Create new connection
+    const conn = new RouterOSAPI({
+      host,
+      port,
+      user,
+      password: pass,
       timeout: 10000,
+      keepalive: true,
     });
 
-    // Wait for connection to be established
-    return new Promise((resolve, reject) => {
-      connection.on("error", (err) => {
-        console.error("Connection error:", err);
-        reject(err);
-      });
+    // Connect to device
+    await conn.connect();
 
-      connection.on("connected", () => {
-        console.log("✅ Connected to MikroTik");
-        resolve(connection);
-      });
-
-      // Set timeout
-      setTimeout(() => {
-        reject(new Error("Connection timeout"));
-      }, 10000);
-    });
+    console.log("✅ Connected to MikroTik successfully");
+    return conn;
   } catch (error) {
     console.error("❌ MikroTik connection error:", error.message);
     throw new Error(`Failed to connect to MikroTik: ${error.message}`);
@@ -45,89 +41,115 @@ async function connect() {
 }
 
 async function getPPPoEUsers() {
-  let connection = null;
+  let conn = null;
   try {
-    connection = await connect();
+    conn = await connect();
 
-    return new Promise((resolve, reject) => {
-      connection.get("/ppp/secret/print", (err, data) => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve(data || []);
-        }
-        connection.close();
-      });
+    console.log("Fetching PPPoE users...");
+    const users = await conn.write("/ppp/secret/print");
 
-      // Set timeout
-      setTimeout(() => {
-        connection.close();
-        reject(new Error("MikroTik command timeout"));
-      }, 15000);
-    });
+    await conn.close();
+    console.log(`✅ Retrieved ${users.length} PPPoE users`);
+
+    return users;
   } catch (error) {
-    console.error("Error in getPPPoEUsers:", error);
-    if (connection) connection.close();
+    console.error("Error in getPPPoEUsers:", error.message);
+    if (conn) {
+      try {
+        await conn.close();
+      } catch (e) {}
+    }
     throw error;
   }
 }
 
 async function getActiveUsers() {
-  let connection = null;
+  let conn = null;
   try {
-    connection = await connect();
+    conn = await connect();
 
-    return new Promise((resolve, reject) => {
-      connection.get("/ppp/active/print", (err, data) => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve(data || []);
-        }
-        connection.close();
-      });
+    console.log("Fetching active users...");
+    const users = await conn.write("/ppp/active/print");
 
-      setTimeout(() => {
-        connection.close();
-        reject(new Error("MikroTik command timeout"));
-      }, 15000);
-    });
+    await conn.close();
+    console.log(`✅ Retrieved ${users.length} active users`);
+
+    return users;
   } catch (error) {
-    console.error("Error in getActiveUsers:", error);
-    if (connection) connection.close();
+    console.error("Error in getActiveUsers:", error.message);
+    if (conn) {
+      try {
+        await conn.close();
+      } catch (e) {}
+    }
     throw error;
   }
 }
 
 async function testConnection() {
-  let connection = null;
+  let conn = null;
   try {
-    connection = await connect();
+    conn = await connect();
 
-    return new Promise((resolve, reject) => {
-      connection.get("/system/identity/print", (err, data) => {
-        if (err) {
-          reject(err);
-        } else {
-          console.log("MikroTik identity:", data);
-          resolve(data);
-        }
-        connection.close();
-      });
+    // Test with a simple command
+    const identity = await conn.write("/system/identity/print");
+    const resources = await conn.write("/system/resource/print");
 
-      setTimeout(() => {
-        connection.close();
-        reject(new Error("Connection test timeout"));
-      }, 10000);
-    });
+    await conn.close();
+
+    return {
+      identity: identity[0] || { name: "Unknown" },
+      resources: resources[0] || {},
+    };
   } catch (error) {
-    if (connection) connection.close();
+    console.error("Test connection error:", error.message);
+    if (conn) {
+      try {
+        await conn.close();
+      } catch (e) {}
+    }
     throw error;
   }
+}
+
+// Format PPPoE users for better readability
+async function getFormattedPPPoEUsers() {
+  const users = await getPPPoEUsers();
+  return users.map((user) => ({
+    id: user[".id"],
+    name: user.name,
+    service: user.service || "pppoe",
+    profile: user.profile,
+    localAddress: user["local-address"],
+    remoteAddress: user["remote-address"],
+    disabled: user.disabled === "true",
+    comment: user.comment || "",
+    lastLoggedOut: user["last-logged-out"] || "",
+    uptime: user.uptime || "",
+  }));
+}
+
+// Format active users for better readability
+async function getFormattedActiveUsers() {
+  const users = await getActiveUsers();
+  return users.map((user) => ({
+    id: user[".id"],
+    name: user.name,
+    service: user.service,
+    address: user.address,
+    uptime: user.uptime,
+    bytesIn: parseInt(user["bytes-in"] || "0"),
+    bytesOut: parseInt(user["bytes-out"] || "0"),
+    packetsIn: parseInt(user["packets-in"] || "0"),
+    packetsOut: parseInt(user["packets-out"] || "0"),
+    radius: user.radius || false,
+  }));
 }
 
 module.exports = {
   testConnection,
   getPPPoEUsers,
   getActiveUsers,
+  getFormattedPPPoEUsers,
+  getFormattedActiveUsers,
 };
