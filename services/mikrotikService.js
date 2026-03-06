@@ -146,10 +146,122 @@ async function getFormattedActiveUsers() {
   }));
 }
 
+async function getLiveTraffic(interface = "all") {
+  let conn = null;
+  try {
+    conn = await connect();
+
+    const interfaces = await conn.write("/interface/print");
+
+    const trafficData = [];
+
+    for (const iface of interfaces) {
+      if (interface !== "all" && iface.name !== interface) continue;
+
+      const monitor = await conn.write("/interface/monitor-traffic", [
+        `=interface=${iface.name}`,
+        "=once=",
+      ]);
+
+      const data = monitor[0];
+
+      trafficData.push({
+        name: iface.name,
+        rxBitsPerSecond: parseInt(data["rx-bits-per-second"] || "0"),
+        txBitsPerSecond: parseInt(data["tx-bits-per-second"] || "0"),
+        rxBytesPerSecond: parseInt(data["rx-bits-per-second"] || "0") / 8,
+        txBytesPerSecond: parseInt(data["tx-bits-per-second"] || "0") / 8,
+      });
+    }
+
+    await conn.close();
+    return trafficData;
+  } catch (error) {
+    if (conn) await conn.close();
+    throw error;
+  }
+}
+
+async function getTopBandwidthUsers(limit = 10) {
+  let conn = null;
+
+  try {
+    conn = await connect();
+
+    const activeUsers = await conn.write("/ppp/active/print");
+
+    const users = activeUsers.map((user) => {
+      const bytesIn = parseInt(user["bytes-in"] || "0");
+      const bytesOut = parseInt(user["bytes-out"] || "0");
+
+      const bandwidth = bytesIn + bytesOut;
+
+      return {
+        username: user.name,
+        address: user.address,
+        uptime: user.uptime,
+        bytesIn,
+        bytesOut,
+        avgBandwidthBps: bandwidth,
+      };
+    });
+
+    users.sort((a, b) => b.avgBandwidthBps - a.avgBandwidthBps);
+
+    await conn.close();
+
+    return users.slice(0, limit);
+  } catch (error) {
+    if (conn) await conn.close();
+    throw error;
+  }
+}
+
+async function getTrafficMonitor(interface, seconds = 60) {
+  let conn = null;
+
+  try {
+    conn = await connect();
+
+    const result = await conn.write("/interface/monitor-traffic", [
+      `=interface=${interface}`,
+      `=duration=${seconds}`,
+    ]);
+
+    await conn.close();
+
+    return result;
+  } catch (error) {
+    if (conn) await conn.close();
+    throw error;
+  }
+}
+
+async function getSystemResources() {
+  let conn = null;
+
+  try {
+    conn = await connect();
+
+    const res = await conn.write("/system/resource/print");
+
+    await conn.close();
+
+    return res[0];
+  } catch (error) {
+    if (conn) await conn.close();
+    throw error;
+  }
+}
+
 module.exports = {
   testConnection,
   getPPPoEUsers,
   getActiveUsers,
   getFormattedPPPoEUsers,
   getFormattedActiveUsers,
+  getLiveTraffic,
+  getTopBandwidthUsers,
+  getTrafficMonitor,
+  getSystemResources,
 };
