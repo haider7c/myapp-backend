@@ -3,16 +3,14 @@ const express = require("express");
 const router = express.Router();
 
 const {
-  // Get functions
   getPPPoEUsers,
   getActiveUsers,
+  getUserTraffic,
   getPPPProfiles,
   getInterfaces,
   getQueues,
   getSystemResources,
   getTrafficMonitor,
-
-  // User management
   addPPPoEUser,
   updatePPPoEUser,
   deletePPPoEUser,
@@ -20,19 +18,11 @@ const {
   disablePPPoEUser,
   disconnectUser,
   disconnectAllUsers,
-
-  // Queue management
   addSimpleQueue,
   deleteQueue,
-
-  // Profile management
   addPPPProfile,
-
-  // Live monitoring
   getLiveTraffic,
   getTopBandwidthUsers,
-
-  // System
   testConnection,
   rebootRouter,
 } = require("../services/mikrotikService");
@@ -232,9 +222,11 @@ router.get("/search/:username", async (req, res) => {
 router.get("/user/:username", async (req, res) => {
   try {
     const username = req.params.username;
-    const [pppoeUsers, activeUsers] = await Promise.all([
+
+    const [pppoeUsers, activeUsers, traffic] = await Promise.all([
       getPPPoEUsers(),
       getActiveUsers(),
+      getUserTraffic(username),
     ]);
 
     const user = pppoeUsers.find((u) => u.name === username);
@@ -260,24 +252,23 @@ router.get("/user/:username", async (req, res) => {
         comment: user.comment || "",
         last_logout: user["last-logged-out"],
         last_mac: user["last-caller-id"],
-        last_disconnect_reason: user["last-disconnect-reason"],
         currently_online: !!activeSession,
+
         session: activeSession
           ? {
               address: activeSession.address,
               uptime: activeSession.uptime,
               caller_id: activeSession["caller-id"],
-              bytes_in: activeSession["bytes-in"],
-              bytes_out: activeSession["bytes-out"],
             }
           : null,
+
+        traffic: traffic, // 👈 IMPORTANT
       },
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
-
 // Get users by profile
 router.get("/by-profile/:profile", async (req, res) => {
   try {

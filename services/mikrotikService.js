@@ -68,10 +68,14 @@ async function getActiveUsers() {
   try {
     conn = await connect();
 
-    console.log("Fetching active users...");
-    const users = await conn.write("/ppp/active/print");
+    console.log("Fetching active users with traffic stats...");
+
+    const users = await conn.write("/ppp/active/print", [
+      "=.proplist=.id,name,service,address,uptime,bytes-in,bytes-out,packets-in,packets-out",
+    ]);
 
     await conn.close();
+
     console.log(`✅ Retrieved ${users.length} active users`);
 
     return users;
@@ -145,7 +149,39 @@ async function getFormattedActiveUsers() {
     radius: user.radius || false,
   }));
 }
+async function getUserTraffic(username) {
+  let conn = null;
 
+  try {
+    conn = await connect();
+
+    const interfaceName = `<pppoe-${username}>`;
+
+    const result = await conn.write("/interface/monitor-traffic", [
+      `=interface=${interfaceName}`,
+      "=once=",
+    ]);
+
+    const data = result[0];
+
+    const download = parseInt(
+      (data["rx-bits-per-second"] || "0").replace("bps", ""),
+    );
+    const upload = parseInt(
+      (data["tx-bits-per-second"] || "0").replace("bps", ""),
+    );
+
+    await conn.close();
+
+    return {
+      download_bps: download,
+      upload_bps: upload,
+    };
+  } catch (error) {
+    if (conn) await conn.close();
+    throw error;
+  }
+}
 async function getLiveTraffic(interface = "all") {
   let conn = null;
   try {
@@ -264,4 +300,5 @@ module.exports = {
   getTopBandwidthUsers,
   getTrafficMonitor,
   getSystemResources,
+  getUserTraffic,
 };
