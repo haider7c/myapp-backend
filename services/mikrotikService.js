@@ -289,6 +289,101 @@ async function getSystemResources() {
     throw error;
   }
 }
+async function disablePPPoEUser(userId) {
+  let conn = null;
+
+  try {
+    conn = await connect();
+
+    await conn.write("/ppp/secret/disable", [`=.id=${userId}`]);
+
+    await conn.close();
+
+    return {
+      success: true,
+      message: "User disabled successfully",
+    };
+  } catch (error) {
+    if (conn) await conn.close();
+    throw error;
+  }
+}
+
+async function enablePPPoEUser(userId) {
+  let conn = null;
+
+  try {
+    conn = await connect();
+
+    await conn.write("/ppp/secret/enable", [`=.id=${userId}`]);
+
+    await conn.close();
+
+    return {
+      success: true,
+      message: "User enabled successfully",
+    };
+  } catch (error) {
+    if (conn) await conn.close();
+    throw error;
+  }
+}
+
+async function disconnectUser(username) {
+  let conn = null;
+
+  try {
+    conn = await connect();
+
+    const active = await conn.write("/ppp/active/print");
+
+    const user = active.find((u) => u.name === username);
+
+    if (!user) {
+      await conn.close();
+      return {
+        success: false,
+        message: "User not online",
+      };
+    }
+
+    await conn.write("/ppp/active/remove", [`=.id=${user[".id"]}`]);
+
+    await conn.close();
+
+    return {
+      success: true,
+      message: "User disconnected",
+    };
+  } catch (error) {
+    if (conn) await conn.close();
+    throw error;
+  }
+}
+
+async function disconnectAllUsers() {
+  let conn = null;
+
+  try {
+    conn = await connect();
+
+    const active = await conn.write("/ppp/active/print");
+
+    for (const user of active) {
+      await conn.write("/ppp/active/remove", [`=.id=${user[".id"]}`]);
+    }
+
+    await conn.close();
+
+    return {
+      success: true,
+      message: "All users disconnected",
+    };
+  } catch (error) {
+    if (conn) await conn.close();
+    throw error;
+  }
+}
 
 module.exports = {
   testConnection,
@@ -301,4 +396,9 @@ module.exports = {
   getTrafficMonitor,
   getSystemResources,
   getUserTraffic,
+
+  enablePPPoEUser,
+  disablePPPoEUser,
+  disconnectUser,
+  disconnectAllUsers,
 };
