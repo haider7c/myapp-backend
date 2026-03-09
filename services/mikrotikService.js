@@ -1,4 +1,3 @@
-// services/mikrotikService.js
 const { RouterOSAPI } = require("node-routeros");
 
 const host = process.env.MT_HOST;
@@ -149,6 +148,7 @@ async function getFormattedActiveUsers() {
     radius: user.radius || false,
   }));
 }
+
 async function getUserTraffic(username) {
   let conn = null;
 
@@ -182,6 +182,7 @@ async function getUserTraffic(username) {
     throw error;
   }
 }
+
 async function getLiveTraffic(interface = "all") {
   let conn = null;
   try {
@@ -289,6 +290,7 @@ async function getSystemResources() {
     throw error;
   }
 }
+
 async function disablePPPoEUser(userId) {
   let conn = null;
 
@@ -325,6 +327,57 @@ async function enablePPPoEUser(userId) {
     };
   } catch (error) {
     if (conn) await conn.close();
+    throw error;
+  }
+}
+
+/**
+ * UPDATE PPPoE USER FUNCTION - ADD THIS
+ */
+async function updatePPPoEUser(userId, updateData) {
+  let conn = null;
+
+  try {
+    conn = await connect();
+
+    console.log(`Updating PPPoE user with ID: ${userId}`, updateData);
+
+    // Build command parameters
+    const params = [`=.id=${userId}`];
+
+    if (updateData.password) {
+      params.push(`=password=${updateData.password}`);
+    }
+
+    if (updateData.profile) {
+      params.push(`=profile=${updateData.profile}`);
+    }
+
+    if (updateData.comment !== undefined) {
+      params.push(`=comment=${updateData.comment || ""}`);
+    }
+
+    if (updateData.service) {
+      params.push(`=service=${updateData.service}`);
+    }
+
+    // Execute update command
+    await conn.write("/ppp/secret/set", params);
+
+    await conn.close();
+
+    return {
+      success: true,
+      message: "User updated successfully",
+      data: updateData,
+    };
+  } catch (error) {
+    console.error("Error in updatePPPoEUser:", error.message);
+    if (conn) {
+      try {
+        await conn.close();
+      } catch (e) {}
+    }
     throw error;
   }
 }
@@ -385,6 +438,121 @@ async function disconnectAllUsers() {
   }
 }
 
+// Placeholder functions for missing exports
+async function getPPPProfiles() {
+  let conn = null;
+  try {
+    conn = await connect();
+    const profiles = await conn.write("/ppp/profile/print");
+    await conn.close();
+    return profiles;
+  } catch (error) {
+    if (conn) await conn.close();
+    throw error;
+  }
+}
+
+async function getInterfaces() {
+  let conn = null;
+  try {
+    conn = await connect();
+    const interfaces = await conn.write("/interface/print");
+    await conn.close();
+    return interfaces;
+  } catch (error) {
+    if (conn) await conn.close();
+    throw error;
+  }
+}
+
+async function getQueues() {
+  let conn = null;
+  try {
+    conn = await connect();
+    const queues = await conn.write("/queue/simple/print");
+    await conn.close();
+    return queues;
+  } catch (error) {
+    if (conn) await conn.close();
+    throw error;
+  }
+}
+
+async function addPPPoEUser(userData) {
+  let conn = null;
+  try {
+    conn = await connect();
+
+    const params = [
+      `=name=${userData.name}`,
+      `=password=${userData.password}`,
+      `=profile=${userData.profile}`,
+      `=service=${userData.service || "pppoe"}`,
+      `=comment=${userData.comment || ""}`,
+      `=disabled=${userData.disabled ? "yes" : "no"}`,
+    ];
+
+    await conn.write("/ppp/secret/add", params);
+
+    await conn.close();
+
+    return {
+      success: true,
+      message: "User added successfully",
+    };
+  } catch (error) {
+    if (conn) await conn.close();
+    throw error;
+  }
+}
+
+async function deletePPPoEUser(userId) {
+  let conn = null;
+  try {
+    conn = await connect();
+
+    await conn.write("/ppp/secret/remove", [`=.id=${userId}`]);
+
+    await conn.close();
+
+    return {
+      success: true,
+      message: "User deleted successfully",
+    };
+  } catch (error) {
+    if (conn) await conn.close();
+    throw error;
+  }
+}
+
+async function addSimpleQueue(queueData) {
+  // Placeholder
+  return { success: true, message: "Queue added (placeholder)" };
+}
+
+async function deleteQueue(queueId) {
+  // Placeholder
+  return { success: true, message: "Queue deleted (placeholder)" };
+}
+
+async function addPPPProfile(profileData) {
+  // Placeholder
+  return { success: true, message: "Profile added (placeholder)" };
+}
+
+async function rebootRouter() {
+  let conn = null;
+  try {
+    conn = await connect();
+    await conn.write("/system/reboot");
+    await conn.close();
+    return { success: true, message: "Router rebooting" };
+  } catch (error) {
+    if (conn) await conn.close();
+    throw error;
+  }
+}
+
 module.exports = {
   testConnection,
   getPPPoEUsers,
@@ -396,9 +564,20 @@ module.exports = {
   getTrafficMonitor,
   getSystemResources,
   getUserTraffic,
-
   enablePPPoEUser,
   disablePPPoEUser,
   disconnectUser,
   disconnectAllUsers,
+  // NEW: Add update function
+  updatePPPoEUser,
+  // Add missing functions
+  getPPPProfiles,
+  getInterfaces,
+  getQueues,
+  addPPPoEUser,
+  deletePPPoEUser,
+  addSimpleQueue,
+  deleteQueue,
+  addPPPProfile,
+  rebootRouter,
 };
