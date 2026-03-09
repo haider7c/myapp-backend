@@ -93,6 +93,7 @@ router.get("/online-users", async (req, res) => {
 });
 
 // Get PPP profiles
+// MikroTik service mein yeh function check karein
 router.get("/profiles/list", async (req, res) => {
   try {
     const profiles = await getPPPProfiles();
@@ -102,10 +103,14 @@ router.get("/profiles/list", async (req, res) => {
       data: profiles,
     });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    console.error("Profiles error:", err);
+    res.status(500).json({
+      success: false,
+      error: err.message,
+      details: "Failed to fetch PPP profiles",
+    });
   }
 });
-
 // Get interfaces
 router.get("/interfaces", async (req, res) => {
   try {
