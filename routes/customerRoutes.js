@@ -100,7 +100,7 @@ router.get("/:id", auth, async (req, res) => {
       .populate("areaId", "name")
       .populate("serviceId", "name")
       .populate("assignedEmployeeId", "name");
-    
+
     if (!customer) {
       return res.status(404).json({ message: "Customer not found" });
     }
@@ -108,14 +108,17 @@ router.get("/:id", auth, async (req, res) => {
     // Check if employee has permission to view this customer
     if (req.user.role === "employee") {
       const isAssignedArea = req.user.assignedAreas?.some(
-        areaId => areaId.toString() === customer.areaId?._id?.toString()
+        (areaId) => areaId.toString() === customer.areaId?._id?.toString(),
       );
-      
+
       if (!isAssignedArea) {
-        return res.status(403).json({ message: "Access denied. You don't have permission to view this customer." });
+        return res.status(403).json({
+          message:
+            "Access denied. You don't have permission to view this customer.",
+        });
       }
     }
-    
+
     res.json(customer);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -129,7 +132,9 @@ router.put("/:id/discontinue", auth, async (req, res) => {
   try {
     // Check if user is owner
     if (req.user.role !== "owner") {
-      return res.status(403).json({ message: "Only owner can discontinue customers" });
+      return res
+        .status(403)
+        .json({ message: "Only owner can discontinue customers" });
     }
 
     const customer = await Customer.findByIdAndUpdate(
@@ -138,7 +143,7 @@ router.put("/:id/discontinue", auth, async (req, res) => {
         status: "discontinued",
         discontinuedAt: new Date(),
       },
-      { new: true }
+      { new: true },
     )
       .populate("areaId", "name")
       .populate("serviceId", "name")
@@ -160,7 +165,9 @@ router.put("/:id/reactivate", auth, async (req, res) => {
   try {
     // Check if user is owner
     if (req.user.role !== "owner") {
-      return res.status(403).json({ message: "Only owner can reactivate customers" });
+      return res
+        .status(403)
+        .json({ message: "Only owner can reactivate customers" });
     }
 
     const customer = await Customer.findByIdAndUpdate(
@@ -169,7 +176,7 @@ router.put("/:id/reactivate", auth, async (req, res) => {
         status: "active",
         discontinuedAt: null,
       },
-      { new: true }
+      { new: true },
     )
       .populate("areaId", "name")
       .populate("serviceId", "name")
@@ -190,9 +197,9 @@ router.put("/:id/reactivate", auth, async (req, res) => {
 router.post("/", auth, async (req, res) => {
   try {
     console.log("User data from token:", req.user);
-    
+
     let ownerId;
-    
+
     if (req.user.role === "owner") {
       ownerId = req.user.id;
     } else if (req.user.role === "employee" && req.user.ownerId) {
@@ -200,66 +207,185 @@ router.post("/", auth, async (req, res) => {
     } else {
       ownerId = req.body.ownerId || req.user.id;
     }
-    
+
     console.log("Extracted ownerId:", ownerId);
-    
+
     if (!ownerId) {
-      return res.status(400).json({ 
-        message: "ownerId is required. Please provide a valid owner." 
+      return res.status(400).json({
+        message: "ownerId is required. Please provide a valid owner.",
       });
     }
-    
+
     if (!req.body.areaId) {
       return res.status(400).json({ message: "areaId is required" });
     }
-    
+
     if (!req.body.serviceId) {
       return res.status(400).json({ message: "serviceId is required" });
     }
-    
+
     const customerData = {
       ...req.body,
       ownerId: ownerId,
     };
-    
+
     console.log("Creating customer with data:", customerData);
-    
+
     const customer = await Customer.create(customerData);
-    
+
     // Populate the created customer before sending response
     const populatedCustomer = await Customer.findById(customer._id)
       .populate("areaId", "name")
       .populate("serviceId", "name")
       .populate("assignedEmployeeId", "name");
-    
+
     res.status(201).json({
       message: "Customer created successfully",
-      customer: populatedCustomer
+      customer: populatedCustomer,
     });
-    
   } catch (err) {
     console.error("Customer creation error:", err);
-    
-    if (err.name === 'ValidationError') {
-      const errors = Object.values(err.errors).map(e => e.message);
-      return res.status(400).json({ 
-        message: "Validation Error", 
-        errors 
+
+    if (err.name === "ValidationError") {
+      const errors = Object.values(err.errors).map((e) => e.message);
+      return res.status(400).json({
+        message: "Validation Error",
+        errors,
       });
     }
-    
+
     if (err.code === 11000) {
-      return res.status(400).json({ 
-        message: "Duplicate entry. Customer with this phone or CNIC already exists." 
+      return res.status(400).json({
+        message:
+          "Duplicate entry. Customer with this phone or CNIC already exists.",
       });
     }
-    
-    res.status(500).json({ 
-      message: err.message || "Server error creating customer" 
+
+    res.status(500).json({
+      message: err.message || "Server error creating customer",
+    });
+  }
+});
+// =============================
+// SEARCH CUSTOMER BY ID/USERNAME
+// =============================
+router.get("/search/:identifier", auth, async (req, res) => {
+  try {
+    const identifier = req.params.identifier;
+
+    console.log("Searching for customer with identifier:", identifier);
+
+    // Build search query - search in multiple fields
+    const searchQuery = {
+      $or: [
+        { customerId: { $regex: identifier, $options: "i" } }, // case-insensitive search in customerId
+        { customerName: { $regex: identifier, $options: "i" } }, // search in customer name
+        { phone: { $regex: identifier, $options: "i" } }, // search in phone
+        { serialNumber: identifier }, // exact match in serial number
+        { _id: identifier.match(/^[0-9a-fA-F]{24}$/) ? identifier : null }, // if it's a valid ObjectId
+      ].filter((condition) => condition !== null), // remove null conditions
+    };
+
+    console.log("Search query:", JSON.stringify(searchQuery));
+
+    let customers = await Customer.find(searchQuery)
+      .populate("areaId", "name")
+      .populate("serviceId", "name")
+      .populate("assignedEmployeeId", "name");
+
+    // Role-based filtering
+    if (req.user.role === "employee") {
+      customers = customers.filter((customer) =>
+        req.user.assignedAreas?.some(
+          (areaId) => areaId.toString() === customer.areaId?._id?.toString(),
+        ),
+      );
+    }
+
+    console.log(`Found ${customers.length} customers`);
+
+    if (customers.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "No customer found with this identifier",
+      });
+    }
+
+    // If exact match by customerId, return that customer
+    const exactMatch = customers.find(
+      (c) => c.customerId?.toLowerCase() === identifier.toLowerCase(),
+    );
+
+    if (exactMatch) {
+      return res.json({
+        success: true,
+        exact: true,
+        customer: exactMatch,
+      });
+    }
+
+    // Otherwise return all matches
+    res.json({
+      success: true,
+      exact: false,
+      count: customers.length,
+      customers: customers,
+    });
+  } catch (error) {
+    console.error("Search customer error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message,
     });
   }
 });
 
+// =============================
+// GET CUSTOMER BY CUSTOMER ID
+// =============================
+router.get("/by-customerid/:customerId", auth, async (req, res) => {
+  try {
+    const customerId = req.params.customerId;
+
+    const customer = await Customer.findOne({ customerId: customerId })
+      .populate("areaId", "name")
+      .populate("serviceId", "name")
+      .populate("assignedEmployeeId", "name");
+
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        message: "Customer not found with this ID",
+      });
+    }
+
+    // Check if employee has permission
+    if (req.user.role === "employee") {
+      const isAssignedArea = req.user.assignedAreas?.some(
+        (areaId) => areaId.toString() === customer.areaId?._id?.toString(),
+      );
+
+      if (!isAssignedArea) {
+        return res.status(403).json({
+          success: false,
+          message:
+            "Access denied. You don't have permission to view this customer.",
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      customer: customer,
+    });
+  } catch (error) {
+    console.error("Get customer by ID error:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
+});
 // =============================
 // UPDATE CUSTOMER (OWNER ONLY)
 // =============================
@@ -267,13 +393,15 @@ router.put("/:id", auth, async (req, res) => {
   try {
     // Check if user is owner
     if (req.user.role !== "owner") {
-      return res.status(403).json({ message: "Only owner can update customer details" });
+      return res
+        .status(403)
+        .json({ message: "Only owner can update customer details" });
     }
 
     const updatedCustomer = await Customer.findByIdAndUpdate(
       req.params.id,
       req.body,
-      { new: true }
+      { new: true },
     )
       .populate("areaId", "name")
       .populate("serviceId", "name")
@@ -299,7 +427,9 @@ router.delete("/:id", auth, async (req, res) => {
   try {
     // Check if user is owner
     if (req.user.role !== "owner") {
-      return res.status(403).json({ message: "Only owner can delete customers" });
+      return res
+        .status(403)
+        .json({ message: "Only owner can delete customers" });
     }
 
     const deletedCustomer = await Customer.findByIdAndDelete(req.params.id);
@@ -323,7 +453,7 @@ router.delete("/:id", auth, async (req, res) => {
 router.put("/:id/mark-paid", auth, async (req, res) => {
   try {
     const customer = await Customer.findById(req.params.id);
-    
+
     if (!customer) {
       return res.status(404).json({ message: "Customer not found" });
     }
@@ -331,12 +461,13 @@ router.put("/:id/mark-paid", auth, async (req, res) => {
     // Check if employee has permission
     if (req.user.role === "employee") {
       const isAssignedArea = req.user.assignedAreas?.some(
-        areaId => areaId.toString() === customer.areaId?.toString()
+        (areaId) => areaId.toString() === customer.areaId?.toString(),
       );
-      
+
       if (!isAssignedArea) {
-        return res.status(403).json({ 
-          message: "Access denied. You can only mark payments for customers in your assigned areas." 
+        return res.status(403).json({
+          message:
+            "Access denied. You can only mark payments for customers in your assigned areas.",
         });
       }
     }
@@ -350,7 +481,7 @@ router.put("/:id/mark-paid", auth, async (req, res) => {
         paymentStatus: "paid",
         synced: true,
       },
-      { new: true }
+      { new: true },
     )
       .populate("areaId", "name")
       .populate("serviceId", "name")
