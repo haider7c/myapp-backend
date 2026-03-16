@@ -25,6 +25,9 @@ const {
   getTopBandwidthUsers,
   testConnection,
   rebootRouter,
+  getUsersStatusByNames,
+  enablePPPoEUserByUsername,
+  disablePPPoEUserByUsername,
 } = require("../services/mikrotikService");
 
 // ==================== DEBUG & TEST ====================
@@ -33,10 +36,10 @@ router.get("/debug", (req, res) => {
   res.json({
     status: "MikroTik RouterOS API",
     environment: {
-      host: process.env.MT_HOST ? "✓ Set" : "✗ Not set",
-      port: process.env.MT_PORT ? "✓ Set" : "✗ Not set (using default 2222)",
-      user: process.env.MT_USER ? "✓ Set" : "✗ Not set",
-      pass: process.env.MT_PASS ? "✓ Set" : "✗ Not set",
+      host: process.env.MT_HOST ? "âœ“ Set" : "âœ— Not set",
+      port: process.env.MT_PORT ? "âœ“ Set" : "âœ— Not set (using default 2222)",
+      user: process.env.MT_USER ? "âœ“ Set" : "âœ— Not set",
+      pass: process.env.MT_PASS ? "âœ“ Set" : "âœ— Not set",
     },
     endpoints: {
       system: "/test, /resources, /interfaces, /reboot",
@@ -54,7 +57,7 @@ router.get("/test", async (req, res) => {
     const result = await testConnection();
     res.json({
       success: true,
-      message: "✅ Connected to MikroTik successfully",
+      message: "âœ… Connected to MikroTik successfully",
       data: result,
     });
   } catch (err) {
@@ -267,7 +270,7 @@ router.get("/user/:username", async (req, res) => {
             }
           : null,
 
-        traffic: traffic, // 👈 IMPORTANT
+        traffic: traffic, // ðŸ‘ˆ IMPORTANT
       },
     });
   } catch (err) {
@@ -411,6 +414,44 @@ router.delete("/user/:id", async (req, res) => {
   try {
     const userId = req.params.id;
     const result = await deletePPPoEUser(userId);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Get status for multiple users by username
+router.post("/users/status", async (req, res) => {
+  try {
+    const usernames = Array.isArray(req.body?.usernames) ? req.body.usernames : [];
+    const users = await getUsersStatusByNames(usernames);
+
+    res.json({
+      success: true,
+      count: users.length,
+      users,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Enable user by username
+router.post("/user/enable-by-username/:username", async (req, res) => {
+  try {
+    const username = req.params.username;
+    const result = await enablePPPoEUserByUsername(username);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Disable user by username
+router.post("/user/disable-by-username/:username", async (req, res) => {
+  try {
+    const username = req.params.username;
+    const result = await disablePPPoEUserByUsername(username);
     res.json(result);
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });

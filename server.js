@@ -47,6 +47,7 @@ app.get("/", (req, res) => res.json({ message: "API OK" }));
 // CRON JOBS (AUTO REMINDER SYSTEM)
 // =====================
 require("./cron/reminderScheduler");
+require("./cron/mikrotikExpiryScheduler");
 
 // =====================
 // START SERVER

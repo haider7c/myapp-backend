@@ -553,6 +553,125 @@ async function rebootRouter() {
   }
 }
 
+
+async function getUsersStatusByNames(usernames = []) {
+  const requestedNames = Array.from(
+    new Set(
+      (usernames || [])
+        .map((username) => (username || "").toString().trim())
+        .filter(Boolean),
+    ),
+  );
+
+  if (requestedNames.length === 0) {
+    return [];
+  }
+
+  let conn = null;
+
+  try {
+    conn = await connect();
+
+    const [pppoeUsers, activeUsers] = await Promise.all([
+      conn.write("/ppp/secret/print"),
+      conn.write("/ppp/active/print"),
+    ]);
+
+    const activeMap = new Map(
+      activeUsers.map((user) => [user.name?.toLowerCase(), user]),
+    );
+
+    const secretMap = new Map(
+      pppoeUsers.map((user) => [user.name?.toLowerCase(), user]),
+    );
+
+    await conn.close();
+
+    return requestedNames.map((username) => {
+      const normalized = username.toLowerCase();
+      const secret = secretMap.get(normalized);
+      const active = activeMap.get(normalized);
+
+      return {
+        username,
+        exists: !!secret,
+        id: secret?.[".id"] || null,
+        disabled: secret?.disabled === "true",
+        profile: secret?.profile || null,
+        comment: secret?.comment || "",
+        online: !!active,
+        address: active?.address || null,
+        uptime: active?.uptime || null,
+      };
+    });
+  } catch (error) {
+    if (conn) await conn.close();
+    throw error;
+  }
+}
+
+async function getUserStatusByUsername(username) {
+  const [status] = await getUsersStatusByNames([username]);
+  return status || {
+    username,
+    exists: false,
+    id: null,
+    disabled: false,
+    online: false,
+  };
+}
+
+async function setPPPoEUserDisabledByUsername(username, disabled) {
+  const normalizedUsername = (username || "").toString().trim();
+
+  if (!normalizedUsername) {
+    throw new Error("Username is required");
+  }
+
+  const status = await getUserStatusByUsername(normalizedUsername);
+
+  if (!status.exists || !status.id) {
+    return {
+      success: false,
+      message: `User ${normalizedUsername} not found`,
+    };
+  }
+
+  if (disabled) {
+    if (status.disabled) {
+      return {
+        success: true,
+        alreadyApplied: true,
+        message: "User already disabled",
+        user: status,
+      };
+    }
+
+    const result = await disablePPPoEUser(status.id);
+    return { ...result, user: status };
+  }
+
+  if (!status.disabled) {
+    return {
+      success: true,
+      alreadyApplied: true,
+      message: "User already enabled",
+      user: status,
+    };
+  }
+
+  const result = await enablePPPoEUser(status.id);
+  return { ...result, user: status };
+}
+
+async function disablePPPoEUserByUsername(username) {
+  return setPPPoEUserDisabledByUsername(username, true);
+}
+
+async function enablePPPoEUserByUsername(username) {
+  return setPPPoEUserDisabledByUsername(username, false);
+}
+
 module.exports = {
   testConnection,
   getPPPoEUsers,
@@ -580,4 +699,8 @@ module.exports = {
   deleteQueue,
   addPPPProfile,
   rebootRouter,
+  getUsersStatusByNames,
+  getUserStatusByUsername,
+  enablePPPoEUserByUsername,
+  disablePPPoEUserByUsername,
 };

@@ -4,9 +4,9 @@ const Customer = require("../models/Customer");
 const BillStatus = require("../models/BillStatus");
 
 const WHATSAPP_STATUS_URL =
-  "https://myapp-backend-nrka.onrender.com/api/whatsapp/status";
+  "http://103.59.217.80:90/api/whatsapp/status";
 const WHATSAPP_SEND_URL =
-  "https://myapp-backend-nrka.onrender.com/api/whatsapp/send";
+  "http://103.59.217.80:90/api/whatsapp/send";
 
 let sentToday = new Set();
 
@@ -222,3 +222,4 @@ cron.schedule("1 0 * * *", async () => {
     console.error("❌ Reminder job error:", err);
   }
 });
+
