@@ -13,6 +13,76 @@ router.get('/', async (req, res) => {
   }
 });
 
+// GET bill statuses for a given month/year (populated) — ported from the
+// desktop app's monthly billing view.
+router.get('/monthly', async (req, res) => {
+  const { month, year } = req.query;
+  try {
+    if (!month || !year) {
+      return res.status(400).json({ message: 'Month and year are required' });
+    }
+    const statuses = await BillStatus.find({
+      month: parseInt(month),
+      year: parseInt(year),
+    }).populate('customerId');
+    res.json(statuses);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// GET a bill status by its recorded transaction ID — ported from desktop.
+router.get('/transaction/:transactionId', async (req, res) => {
+  try {
+    const billStatus = await BillStatus.findOne({ transactionId: req.params.transactionId }).populate(
+      'customerId'
+    );
+    if (!billStatus) {
+      return res.status(404).json({ success: false, error: 'Transaction not found' });
+    }
+    res.json({ success: true, billStatus });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// GET a customer's payment history — ported from desktop.
+router.get('/customer/:customerId', async (req, res) => {
+  try {
+    const { limit = 10 } = req.query;
+    const payments = await BillStatus.find({ customerId: req.params.customerId, billStatus: true })
+      .sort({ paymentDate: -1, billReceivedAt: -1 })
+      .limit(parseInt(limit))
+      .populate('customerId');
+    res.json({ success: true, payments });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// PUT upsert a bill status by customerId+month+year. Separate from the
+// existing POST / (which always creates, and stays untouched so nothing
+// that already depends on that behavior breaks) — this is what the
+// desktop app's "save bill status" flow uses instead, to avoid creating
+// duplicate rows for the same customer/month.
+router.put('/upsert', async (req, res) => {
+  const { customerId, month, year, billStatus, paymentMethod, paymentNote } = req.body;
+  try {
+    let doc = await BillStatus.findOne({ customerId, month, year });
+    if (doc) {
+      doc.billStatus = billStatus;
+      doc.paymentMethod = paymentMethod;
+      doc.paymentNote = paymentNote;
+    } else {
+      doc = new BillStatus({ customerId, month, year, billStatus, paymentMethod, paymentNote });
+    }
+    const saved = await doc.save();
+    res.status(201).json(saved);
+  } catch (err) {
+    res.status(400).json({ message: err.message });
+  }
+});
+
 // POST new bill status
 router.post('/', async (req, res) => {
   try {
@@ -74,10 +144,31 @@ router.patch("/mark-unpaid/:id", async (req, res) => {
   }
 });
 
-// Mark as paid (safe - no duplicates)
+// Mark as paid (safe - no duplicates). transactionId/paymentAmount/paymentDate
+// are optional and only used by the desktop app's payment-recording flow —
+// existing callers that don't send them behave exactly as before.
 router.patch("/mark-paid", async (req, res) => {
   try {
-    const { customerId, month, year, paymentMethod, paymentNote } = req.body;
+    const {
+      customerId,
+      month,
+      year,
+      paymentMethod,
+      paymentNote,
+      transactionId,
+      paymentAmount,
+      paymentDate,
+    } = req.body;
+
+    const extra = {};
+    if (transactionId !== undefined) {
+      extra.transactionId = transactionId;
+      extra.received = true;
+      extra.receiptSent = true;
+      extra.receiptSentAt = new Date();
+    }
+    if (paymentAmount !== undefined) extra.paymentAmount = paymentAmount;
+    if (paymentDate !== undefined) extra.paymentDate = new Date(paymentDate);
 
     // check if exists
     let existing = await BillStatus.findOne({ customerId, month, year });
@@ -88,6 +179,7 @@ router.patch("/mark-paid", async (req, res) => {
       existing.paymentNote = paymentNote || existing.paymentNote;
       existing.billReceivedAt = new Date();       // stamp date
       existing.updatedAt = new Date();            // update date
+      Object.assign(existing, extra);
 
       await existing.save();
 
@@ -107,6 +199,7 @@ router.patch("/mark-paid", async (req, res) => {
       paymentMethod,
       paymentNote,
       billReceivedAt: new Date(),
+      ...extra,
     });
 
     return res.json({
@@ -117,6 +210,12 @@ router.patch("/mark-paid", async (req, res) => {
 
   } catch (err) {
     console.error(err);
+    if (err.code === 11000 && err.keyPattern?.transactionId) {
+      return res.status(400).json({
+        success: false,
+        error: "Transaction ID already exists. Please generate a new one.",
+      });
+    }
     res.status(500).json({ success: false, error: err.message });
   }
 });
