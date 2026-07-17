@@ -1,0 +1,30 @@
+name: Deploy backend to Ubuntu server
+
+# Runs automatically every time changes land on main (i.e. whenever a PR is
+# merged or a commit is pushed straight to main). SSHes into the server,
+# pulls the latest code, installs any new dependencies, and restarts the
+# PM2 process so the change goes live with zero manual steps.
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch: {} # lets you also trigger a deploy manually from the Actions tab
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH in and deploy
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          script: |
+            set -e
+            cd "${{ secrets.DEPLOY_PATH }}"
+            git pull origin main
+            npm install --production
+            pm2 restart "${{ secrets.PM2_APP_NAME }}"
+            pm2 save

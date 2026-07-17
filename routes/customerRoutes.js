@@ -1,7 +1,22 @@
 const express = require("express");
 const router = express.Router();
 const Customer = require("../models/Customer");
+const Area = require("../models/Area");
+const Service = require("../models/Service");
 const auth = require("../middleware/auth");
+
+// The desktop billing app doesn't have an Area/Service concept and never
+// sends areaId/serviceId when creating a customer. Rather than reject those
+// requests, fall back to a per-owner "Unassigned"/"General" record so the
+// mobile app's area-based employee filtering keeps working unchanged, and
+// desktop-created customers just land in that default bucket.
+async function getOrCreateDefault(Model, ownerId, name) {
+  let doc = await Model.findOne({ ownerId, name });
+  if (!doc) {
+    doc = await Model.create({ ownerId, name });
+  }
+  return doc;
+}
 
 // =============================
 // GET ALL CUSTOMERS (WITH ROLE-BASED FILTERING)
@@ -216,17 +231,23 @@ router.post("/", auth, async (req, res) => {
       });
     }
 
-    if (!req.body.areaId) {
-      return res.status(400).json({ message: "areaId is required" });
+    let areaId = req.body.areaId;
+    if (!areaId) {
+      const defaultArea = await getOrCreateDefault(Area, ownerId, "Unassigned");
+      areaId = defaultArea._id;
     }
 
-    if (!req.body.serviceId) {
-      return res.status(400).json({ message: "serviceId is required" });
+    let serviceId = req.body.serviceId;
+    if (!serviceId) {
+      const defaultService = await getOrCreateDefault(Service, ownerId, "General");
+      serviceId = defaultService._id;
     }
 
     const customerData = {
       ...req.body,
       ownerId: ownerId,
+      areaId,
+      serviceId,
     };
 
     console.log("Creating customer with data:", customerData);
@@ -487,35 +508,4 @@ router.put("/:id/mark-paid", auth, async (req, res) => {
       .populate("serviceId", "name")
       .populate("assignedEmployeeId", "name");
 
-    res.json({
-      message: "Payment marked as received successfully",
-      customer: updatedCustomer,
-    });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
-
-// =============================
-// EMPLOYEE: GET MY CUSTOMERS (SPECIAL ROUTE)
-// =============================
-router.get("/my", auth, async (req, res) => {
-  try {
-    if (req.user.role !== "employee") {
-      return res.status(403).json({ message: "Employee only" });
-    }
-
-    const customers = await Customer.find({
-      areaId: { $in: req.user.assignedAreas },
-    })
-      .populate("areaId", "name")
-      .populate("serviceId", "name")
-      .populate("assignedEmployeeId", "name");
-
-    res.json(customers);
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
-
-module.exports = router;
+    res.j

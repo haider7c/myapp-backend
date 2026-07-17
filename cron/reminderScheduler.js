@@ -3,10 +3,8 @@ const axios = require("axios");
 const Customer = require("../models/Customer");
 const BillStatus = require("../models/BillStatus");
 
-const WHATSAPP_STATUS_URL =
-  "http://103.59.217.80:90/api/whatsapp/status";
-const WHATSAPP_SEND_URL =
-  "http://103.59.217.80:90/api/whatsapp/send";
+const WHATSAPP_STATUS_URL = "https://sybersoc.duckdns.org/api/whatsapp/status";
+const WHATSAPP_SEND_URL = "https://sybersoc.duckdns.org/api/whatsapp/send";
 
 let sentToday = new Set();
 
@@ -222,4 +220,3 @@ cron.schedule("1 0 * * *", async () => {
     console.error("❌ Reminder job error:", err);
   }
 });
-

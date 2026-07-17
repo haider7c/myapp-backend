@@ -38,19 +38,15 @@ app.use("/api/areas", require("./routes/areaRoutes"));
 app.use("/api/employees", require("./routes/employeeRoutes"));
 app.use("/api/mikrotik", require("./routes/mikrotikRoutes"));
 
+// Ported from the desktop billing app so both the mobile app and the
+// desktop app read/write the same invoice/inventory/receipt-branding data.
+app.use("/api/inventory", require("./routes/inventoryRoutes"));
+app.use("/api/settings", require("./routes/settingsRoutes"));
+app.use("/api/manualbills", require("./routes/manualBillRoutes"));
+
 app.get("/health", (req, res) => res.status(200).send("OK"));
 
 // Default route
 app.get("/", (req, res) => res.json({ message: "API OK" }));
 
-// =====================
-// CRON JOBS (AUTO REMINDER SYSTEM)
-// =====================
-require("./cron/reminderScheduler");
-require("./cron/mikrotikExpiryScheduler");
-
-// =====================
-// START SERVER
-// =====================
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`🚀 Server running on ${PORT}`));
+// =====
