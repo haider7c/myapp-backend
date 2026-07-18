@@ -55,6 +55,29 @@ async function _sendNow(phone, message) {
 }
 
 // --------------------------------------------------------------------------------------
+// PAIRING CODE (alternative to QR scanning)
+// --------------------------------------------------------------------------------------
+// WhatsApp's "Link with phone number" flow: instead of scanning a QR that
+// rotates every ~20-30s and can be scanned a generation too late, this asks
+// WhatsApp to generate an 8-character code tied to a specific phone number,
+// which you type into WhatsApp (Linked Devices → Link with phone number
+// instead) rather than scanning anything. There's nothing to go stale
+// between "the server generated it" and "the phone used it," so it sidesteps
+// the QR-rotation timing issue entirely. Can only be requested while the
+// socket exists and hasn't completed pairing yet.
+async function requestPairingCode(phoneNumber) {
+  if (!sock) throw new Error("socket-not-initialized");
+  if (socketReady) throw new Error("already-connected");
+
+  const normalized = normalizePhone(phoneNumber);
+  if (!normalized) throw new Error("invalid-phone");
+
+  const code = await sock.requestPairingCode(normalized);
+  console.log(`🔗 Pairing code requested for ${normalized}: ${code}`);
+  return code;
+}
+
+// --------------------------------------------------------------------------------------
 // PUBLIC API: SEND MESSAGE (QUEUE IF NEEDED)
 // --------------------------------------------------------------------------------------
 function sendMessage(phone, message, { queueIfNotReady = true } = {}) {
@@ -158,7 +181,7 @@ async function resolveWaVersion() {
 // INITIALIZE WHATSAPP SOCKET
 // --------------------------------------------------------------------------------------
 async function initializeWhatsApp() {
-  if (initializing) return { getQR, getStatus, sendMessage, sendDocument };
+  if (initializing) return { getQR, getStatus, sendMessage, sendDocument, requestPairingCode };
   initializing = true;
 
   // Cancel any pending reconnect from a previous socket generation so we
@@ -252,7 +275,7 @@ async function initializeWhatsApp() {
 
   initializing = false;
 
-  return { getQR, getStatus, sendMessage, sendDocument };
+  return { getQR, getStatus, sendMessage, sendDocument, requestPairingCode };
 }
 
 // --------------------------------------------------------------------------------------
