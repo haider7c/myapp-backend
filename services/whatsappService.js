@@ -161,11 +161,18 @@ function initializeWhatsApp() {
       // desktop browser installed, so we rely on Puppeteer's own bundled
       // Chromium, downloaded automatically on `npm install`.
     },
-    webVersionCache: {
-      type: "remote",
-      remotePath:
-        "https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html",
-    },
+    // Deliberately NOT pinning webVersionCache to a specific remote HTML
+    // snapshot (the desktop app pins one, copied here initially). WhatsApp
+    // periodically stops serving old web-client versions; when that
+    // happens the page authenticates against locally stored session data
+    // but then WhatsApp's servers reject the stale client build, so
+    // whatsapp-web.js reloads the page and re-authenticates in an endless
+    // loop — which is exactly what was observed (7+ repeated
+    // "authenticated" events, climbing CPU, never reaching "ready").
+    // Leaving webVersionCache unset makes it fetch whatever version
+    // web.whatsapp.com is actually serving right now, the same fix
+    // already applied to the Baileys attempt for the identical failure
+    // mode.
   });
 
   client.on("qr", async (qr) => {
