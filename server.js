@@ -1,24 +1,15 @@
 // backend/server.js
 const express = require("express");
-const mongoose = require("mongoose");
 const cors = require("cors");
 
 require("dotenv").config();
+
+const connectDB = require("./config/db");
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
-// =====================
-// DATABASE CONNECT
-// =====================
-console.log("Mongo URI:", process.env.MONGODB_URI);
-
-mongoose
-  .connect(process.env.MONGODB_URI)
-  .then(() => console.log("✅ MongoDB connected"))
-  .catch((err) => console.error("❌ MongoDB error:", err));
 
 // =====================
 // ROUTES
@@ -49,4 +40,38 @@ app.get("/health", (req, res) => res.status(200).send("OK"));
 // Default route
 app.get("/", (req, res) => res.json({ message: "API OK" }));
 
-// =====
+// =====================
+// START SERVER
+// =====================
+// Everything below needs a live MongoDB connection — especially the cron
+// jobs, which run their first pass just 5 seconds after boot. The previous
+// version called mongoose.connect() without awaiting it, then immediately
+// required the cron schedulers and started listening — so requests and
+// background jobs could run before the connection was actually ready.
+// Mongoose's default query buffering papers over *short* gaps, but a slow
+// Atlas connection blows past its 10s buffer timeout, throwing "Operation
+// X buffering timed out" — which is exactly what was silently swallowing
+// the MikroTik expiry scheduler's SchedulerState writes (caught by that
+// function's own try/catch, so it looked like it succeeded even though
+// nothing was ever actually saved to the database).
+async function startServer() {
+  if (!process.env.MONGODB_URI) {
+    console.error("❌ Missing MONGODB_URI. Refusing to start without a database connection.");
+    process.exit(1);
+  }
+
+  await connectDB();
+
+  // Load schedulers only after MongoDB is ready so background jobs never
+  // run a query against a not-yet-connected instance.
+  require("./cron/reminderScheduler");
+  require("./cron/mikrotikExpiryScheduler");
+
+  const PORT = process.env.PORT || 5000;
+  app.listen(PORT, () => console.log(`🚀 Server running on ${PORT}`));
+}
+
+startServer().catch((error) => {
+  console.error("❌ Startup failed:", error);
+  process.exit(1);
+});
