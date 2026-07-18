@@ -1,5 +1,6 @@
 const cron = require("node-cron");
 const Customer = require("../models/Customer");
+const SchedulerState = require("../models/SchedulerState");
 const {
   disablePPPoEUserByUsername,
   disconnectUser,
@@ -11,8 +12,43 @@ const DISABLE_CRON = "0 12 * * *";
 const DISCONNECT_CRON = "10 12 * * *";
 const RECOVERY_CRON = "*/5 * * * *";
 
+const DISABLE_STATE_KEY = "mikrotikExpiryDisable";
+const DISCONNECT_STATE_KEY = "mikrotikExpiryDisconnect";
+
+// In-memory cache of "last day this job completed", backed by the
+// SchedulerState collection so a restart can never forget it already ran
+// today. `stateLoaded` guards against re-reading the DB on every call once
+// it's been loaded once per process lifetime.
 let lastDisableRunKey = null;
 let lastDisconnectRunKey = null;
+let stateLoaded = false;
+
+async function loadPersistedState() {
+  if (stateLoaded) return;
+  try {
+    const [disableState, disconnectState] = await Promise.all([
+      SchedulerState.findOne({ key: DISABLE_STATE_KEY }).lean(),
+      SchedulerState.findOne({ key: DISCONNECT_STATE_KEY }).lean(),
+    ]);
+    lastDisableRunKey = disableState?.lastRunDayKey || null;
+    lastDisconnectRunKey = disconnectState?.lastRunDayKey || null;
+    stateLoaded = true;
+    console.log("[ExpiryScheduler] Restored scheduler state from DB:", {
+      lastDisableRunKey,
+      lastDisconnectRunKey,
+    });
+  } catch (error) {
+    console.error("[ExpiryScheduler] Failed to load persisted scheduler state:", error.message);
+  }
+}
+
+async function persistRunKey(key, dayKey) {
+  try {
+    await SchedulerState.findOneAndUpdate({ key }, { lastRunDayKey: dayKey }, { upsert: true });
+  } catch (error) {
+    console.error(`[ExpiryScheduler] Failed to persist scheduler state for ${key}:`, error.message);
+  }
+}
 
 function getKarachiNow() {
   const formatter = new Intl.DateTimeFormat("en-US", {
@@ -69,6 +105,7 @@ async function getDueCustomersForToday() {
 }
 
 async function disableDueUsers(source = "schedule") {
+  await loadPersistedState();
   const now = getKarachiNow();
   const dayKey = getDayKey(now);
 
@@ -111,11 +148,13 @@ async function disableDueUsers(source = "schedule") {
   }
 
   lastDisableRunKey = dayKey;
+  await persistRunKey(DISABLE_STATE_KEY, dayKey);
   console.log("[ExpiryScheduler] Disable summary:", summary);
   return summary;
 }
 
 async function disconnectDueUsers(source = "schedule") {
+  await loadPersistedState();
   const now = getKarachiNow();
   const dayKey = getDayKey(now);
 
@@ -173,11 +212,13 @@ async function disconnectDueUsers(source = "schedule") {
   }
 
   lastDisconnectRunKey = dayKey;
+  await persistRunKey(DISCONNECT_STATE_KEY, dayKey);
   console.log("[ExpiryScheduler] Disconnect summary:", summary);
   return summary;
 }
 
 async function reconcileExpiryAutomation() {
+  await loadPersistedState();
   const now = getKarachiNow();
 
   if (now.hour < 12) {
