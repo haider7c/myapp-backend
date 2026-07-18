@@ -22,6 +22,7 @@ let qrBase64 = null;
 let qrGeneratedAt = null;
 let qrCount = 0;
 let socketReady = false;
+let transportAlive = false;
 let initializing = false;
 let serviceInstance = null;
 let reconnectTimer = null;
@@ -93,15 +94,32 @@ async function requestPairingCode(phoneNumber) {
   if (!normalized) throw new Error("invalid-phone");
   if (socketReady) throw new Error("already-connected");
 
+  // Fast path: a socket already exists and its transport is live (it's
+  // mid-handshake or already showing a QR) — exactly the state Baileys
+  // expects for this call. Use it directly. Spinning up a second socket
+  // here instead (the previous behavior) created two simultaneous
+  // connections sharing the same auth directory, and WhatsApp closed the
+  // newer one with "Connection Closed" even though the first socket was
+  // perfectly fine.
+  if (sock && transportAlive) {
+    const code = await sock.requestPairingCode(normalized);
+    pairingCode = code;
+    pairingCodeGeneratedAt = Date.now();
+    pairingCodeRequestedFor = normalized;
+    console.log(`🔗 Pairing code requested directly for ${normalized}: ${code}`);
+    return code;
+  }
+
+  // Slow path: no socket at all, or the existing one's transport already
+  // died (e.g. after a previous logout). Start a fresh one and let the
+  // connection.update handler fire the request once it reaches a state
+  // where WhatsApp will actually accept it, instead of guessing a delay.
   pendingPairingPhone = normalized;
   pairingCode = null;
   pairingCodeGeneratedAt = null;
   pairingCodeRequestedFor = null;
   pairingCodeError = null;
 
-  // Detach the old socket's listeners before replacing it so a delayed
-  // event from the previous (likely already-dead) connection can't fire
-  // into this new attempt's state.
   if (sock?.ev) {
     sock.ev.removeAllListeners("connection.update");
     sock.ev.removeAllListeners("creds.update");
@@ -248,6 +266,12 @@ async function initializeWhatsApp() {
     `🔑 Auth dir has ${authFiles.length} file(s) before connecting (creds present: ${authFiles.includes("creds.json")})`,
   );
 
+  // Not confirmed live until this specific socket's own connection.update
+  // fires "connecting", a qr, or "open" — requestPairingCode() uses this to
+  // decide whether it's safe to use the existing socket directly or needs
+  // to start a fresh one.
+  transportAlive = false;
+
   sock = makeWASocket({
     version,
     auth: state,
@@ -268,11 +292,13 @@ async function initializeWhatsApp() {
       qrBase64 = await QRCode.toDataURL(qr);
       qrGeneratedAt = Date.now();
       qrCount += 1;
+      transportAlive = true;
       console.log(`📱 QR #${qrCount} generated at`, new Date(qrGeneratedAt).toISOString());
       socketReady = false;
     }
 
     if (connection === "connecting") {
+      transportAlive = true;
       console.log("🔄 WhatsApp socket connecting...");
     }
 
@@ -296,6 +322,7 @@ async function initializeWhatsApp() {
     if (connection === "open") {
       console.log("✅ WhatsApp connected successfully!");
       socketReady = true;
+      transportAlive = true;
       qrBase64 = null;
       qrGeneratedAt = null;
       pendingPairingPhone = null;
@@ -304,6 +331,8 @@ async function initializeWhatsApp() {
     }
 
     if (connection === "close") {
+      transportAlive = false;
+
       const reasonCode =
         lastDisconnect?.error?.output?.statusCode ||
         lastDisconnect?.error?.message ||
