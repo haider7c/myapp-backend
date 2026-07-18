@@ -4,6 +4,7 @@ const {
   useMultiFileAuthState,
   DisconnectReason,
   fetchLatestBaileysVersion,
+  fetchLatestWaWebVersion,
   Browsers,
 } = require("@whiskeysockets/baileys");
 
@@ -94,6 +95,39 @@ async function sendDocument(phone, filePath, fileName) {
 }
 
 // --------------------------------------------------------------------------------------
+// RESOLVE WA WEB VERSION TO CONNECT WITH
+// --------------------------------------------------------------------------------------
+// fetchLatestBaileysVersion() reads a version pinned in Baileys' own repo,
+// which can lag behind what WhatsApp's web client is actually running. When
+// that happens, WhatsApp lets the socket connect and generate a QR, but
+// then refuses to finish linking a *new* device and the phone shows
+// "Couldn't link device — An error occurred. Try again." — even though
+// everything about the network/account is fine. fetchLatestWaWebVersion()
+// asks WhatsApp's own web client directly for the version it's currently
+// serving, which is what actually needs to match for new-device pairing to
+// succeed. Fall back to fetchLatestBaileysVersion() only if that lookup
+// itself fails (e.g. no outbound internet to web.whatsapp.com yet).
+async function resolveWaVersion() {
+  try {
+    const result = await fetchLatestWaWebVersion({});
+    if (result?.version) {
+      console.log(
+        `📦 Using live WhatsApp Web version: ${result.version.join(".")} (isLatest: ${result.isLatest})`,
+      );
+      return result.version;
+    }
+  } catch (error) {
+    console.warn("⚠️  fetchLatestWaWebVersion failed, falling back:", error.message);
+  }
+
+  const fallback = await fetchLatestBaileysVersion();
+  console.log(
+    `📦 Using Baileys-pinned WhatsApp Web version: ${fallback.version.join(".")} (isLatest: ${fallback.isLatest})`,
+  );
+  return fallback.version;
+}
+
+// --------------------------------------------------------------------------------------
 // INITIALIZE WHATSAPP SOCKET
 // --------------------------------------------------------------------------------------
 async function initializeWhatsApp() {
@@ -101,7 +135,7 @@ async function initializeWhatsApp() {
   initializing = true;
 
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
-  const { version } = await fetchLatestBaileysVersion();
+  const version = await resolveWaVersion();
 
   sock = makeWASocket({
     version,
