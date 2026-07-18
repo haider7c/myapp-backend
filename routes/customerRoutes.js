@@ -508,4 +508,35 @@ router.put("/:id/mark-paid", auth, async (req, res) => {
       .populate("serviceId", "name")
       .populate("assignedEmployeeId", "name");
 
-    res.j
+    res.json({
+      message: "Payment marked as received successfully",
+      customer: updatedCustomer,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// =============================
+// EMPLOYEE: GET MY CUSTOMERS (SPECIAL ROUTE)
+// =============================
+router.get("/my", auth, async (req, res) => {
+  try {
+    if (req.user.role !== "employee") {
+      return res.status(403).json({ message: "Employee only" });
+    }
+
+    const customers = await Customer.find({
+      areaId: { $in: req.user.assignedAreas },
+    })
+      .populate("areaId", "name")
+      .populate("serviceId", "name")
+      .populate("assignedEmployeeId", "name");
+
+    res.json(customers);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+module.exports = router;
