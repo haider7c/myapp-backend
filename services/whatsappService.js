@@ -142,11 +142,24 @@ function initializeWhatsApp() {
       clientId: "isp-os-backend",
       dataPath: AUTH_DIR,
     }),
+    // This host also runs a full desktop Chrome session with many tabs
+    // (confirmed via ps aux: 7+ renderer processes, ~2.5GB+ RSS), which
+    // periodically starves the headless linking browser of CPU — observed
+    // directly as irregular ~20s QR rotation ballooning to 60-71s gaps.
+    // authTimeoutMs/qrMaxRetries are relaxed so a slow/contended machine
+    // gets to actually finish the handshake instead of the library giving
+    // up and cycling a fresh QR before the scan completes.
+    authTimeoutMs: 0,
+    qrMaxRetries: 0,
     puppeteer: {
       headless: true,
-      // Standard server-safe flags for running headless Chromium without a
-      // display and with restricted permissions (matches what already
-      // works in the desktop app's own Puppeteer config).
+      // Generous protocol timeout so slow message round-trips under CPU
+      // contention don't get treated as a dead browser and killed.
+      protocolTimeout: 300000,
+      // Standard server-safe flags, plus flags that trim the headless
+      // browser's own baseline overhead (extensions, sync, background
+      // networking, throttling) so it competes less for CPU/RAM against
+      // the desktop Chrome session running on the same machine.
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
@@ -155,6 +168,23 @@ function initializeWhatsApp() {
         "--no-first-run",
         "--no-zygote",
         "--disable-gpu",
+        "--disable-extensions",
+        "--disable-background-networking",
+        "--disable-background-timer-throttling",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-renderer-backgrounding",
+        "--disable-sync",
+        "--disable-translate",
+        "--disable-default-apps",
+        "--mute-audio",
+        "--no-default-browser-check",
+        "--disable-client-side-phishing-detection",
+        "--disable-hang-monitor",
+        "--disable-popup-blocking",
+        "--disable-prompt-on-repost",
+        "--disable-domain-reliability",
+        "--disable-component-update",
+        "--disable-ipc-flooding-protection",
       ],
       // No executablePath override here (unlike the desktop app, which
       // points at an installed Google Chrome) — this server has no
