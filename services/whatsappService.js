@@ -329,9 +329,27 @@ async function initializeWhatsApp() {
         console.log("❌ Logged out (401). WhatsApp itself revoked this session.");
         console.log(
           "   This usually means either (a) too many linking attempts in a short window " +
-          "triggered WhatsApp's abuse detection, or (b) the auth state is stale. " +
-          "Run 'npm run clean:sessions' and wait a few minutes before trying again.",
+          "triggered WhatsApp's abuse detection, or (b) the auth state was already stale.",
         );
+
+        // Wipe the now-invalid credentials ourselves instead of relying on
+        // someone remembering to run 'npm run clean:sessions' before the
+        // next attempt. Leaving a revoked creds.json in place means the
+        // very next boot tries to *resume* a session WhatsApp already
+        // killed, which fails instantly with the same 401 before a new QR
+        // or pairing code can even be issued - exactly what was happening
+        // here. Not auto-reconnecting after this: if WhatsApp is actively
+        // rate-limiting new links for this number, immediately retrying
+        // would only make that worse.
+        try {
+          const files = fs.readdirSync(AUTH_DIR);
+          for (const file of files) {
+            fs.unlinkSync(path.join(AUTH_DIR, file));
+          }
+          console.log(`🧹 Cleared ${files.length} stale auth file(s) — next attempt starts fresh.`);
+        } catch (cleanupError) {
+          console.error("⚠️ Failed to auto-clear stale auth state:", cleanupError.message);
+        }
       }
     }
   });
