@@ -6,12 +6,11 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
-    "clean:sessions": "rm -rf .auth_whatsapp",
+    "clean:sessions": "rm -rf .wwebjs_auth .wwebjs_cache .auth_whatsapp",
     "restart:whatsapp": "npm run clean:sessions && npm start",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.7.21",
     "axios": "^1.13.2",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
@@ -23,6 +22,7 @@
     "node-routeros": "^1.6.8",
     "pdfkit": "^0.17.2",
     "pino": "^10.1.0",
+    "puppeteer": "^18.2.1",
     "qrcode": "^1.5.4",
     "whatsapp-web.js": "^1.23.0"
   },

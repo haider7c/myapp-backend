@@ -26,28 +26,6 @@ router.get("/qr", async (req, res) => {
   res.json({ qr });
 });
 
-// REQUEST PAIRING CODE (alternative to scanning the QR)
-// POST body: { "phone": "923041275276" }
-// Returns an 8-character code to type into WhatsApp -> Linked Devices ->
-// Link with phone number instead. Doesn't expire on a rotation timer the
-// way the QR does, so it's the more reliable option when QR linking keeps
-// failing.
-router.post("/pairing-code", async (req, res) => {
-  try {
-    const service = await whatsappServicePromise;
-    const { phone } = req.body;
-
-    if (!phone) {
-      return res.status(400).json({ success: false, error: "phone is required" });
-    }
-
-    const code = await service.requestPairingCode(phone);
-    res.json({ success: true, code });
-  } catch (error) {
-    res.status(400).json({ success: false, error: error.message });
-  }
-});
-
 // SEND MESSAGE
 router.post("/send", async (req, res) => {
   const service = await whatsappServicePromise;
