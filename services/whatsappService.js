@@ -22,6 +22,7 @@ let qrBase64 = null;
 let socketReady = false;
 let initializing = false;
 let serviceInstance = null;
+let reconnectTimer = null;
 
 const messageQueue = [];
 
@@ -134,8 +135,22 @@ async function initializeWhatsApp() {
   if (initializing) return { getQR, getStatus, sendMessage, sendDocument };
   initializing = true;
 
+  // Cancel any pending reconnect from a previous socket generation so we
+  // never end up with two sockets racing to use the same auth directory
+  // at once (that alone is enough to make WhatsApp invalidate one of them
+  // with an immediate 401 after a seemingly successful pairing).
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
   const version = await resolveWaVersion();
+
+  const authFiles = fs.existsSync(AUTH_DIR) ? fs.readdirSync(AUTH_DIR) : [];
+  console.log(
+    `🔑 Auth dir has ${authFiles.length} file(s) before connecting (creds present: ${authFiles.includes("creds.json")})`,
+  );
 
   sock = makeWASocket({
     version,
@@ -155,7 +170,7 @@ async function initializeWhatsApp() {
 
     if (qr) {
       qrBase64 = await QRCode.toDataURL(qr);
-      console.log("📱 QR Generated");
+      console.log("📱 QR Generated at", new Date().toISOString());
       socketReady = false;
     }
 
@@ -173,17 +188,29 @@ async function initializeWhatsApp() {
         lastDisconnect?.error?.message ||
         "unknown";
 
+      // Log the FULL error, not just the status code, so if WhatsApp sends
+      // a human-readable reason (rate limiting, conflict, banned device,
+      // etc.) we can actually see it instead of guessing from a number.
       console.log("⚠️ WhatsApp disconnected:", reasonCode);
+      console.log(
+        "⚠️ Full disconnect detail:",
+        JSON.stringify(lastDisconnect?.error?.output?.payload || lastDisconnect?.error?.message || lastDisconnect?.error, null, 2),
+      );
       socketReady = false;
 
       if (reasonCode !== DisconnectReason.loggedOut) {
         console.log("♻️ Reconnecting in 5 seconds...");
-        setTimeout(() => {
-          serviceInstance = null;
-          initializeWhatsApp();
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null;
+          serviceInstance = initializeWhatsApp();
         }, 5000);
       } else {
-        console.log("❌ Logged out. Delete .auth_whatsapp to reconnect.");
+        console.log("❌ Logged out (401). WhatsApp itself revoked this session.");
+        console.log(
+          "   This usually means either (a) too many linking attempts in a short window " +
+          "triggered WhatsApp's abuse detection, or (b) the auth state is stale. " +
+          "Run 'npm run clean:sessions' and wait a few minutes before trying again.",
+        );
       }
     }
   });
