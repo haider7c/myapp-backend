@@ -26,7 +26,26 @@ let initializing = false;
 let serviceInstance = null;
 let reconnectTimer = null;
 
+// Pairing-code request state. requestPairingCode() sets pendingPairingPhone
+// and forces a brand new socket; the connection.update handler below is the
+// only place that actually calls sock.requestPairingCode(), and only once
+// the socket has reached a state where that call can succeed (per Baileys'
+// own documented pattern: when connection === "connecting" or a qr has just
+// been issued). This removes the need to guess/sleep for the right timing
+// from the outside — calling requestPairingCode() too early against a socket
+// whose transport isn't open yet is exactly what was failing with
+// "Connection Closed" before.
+let pendingPairingPhone = null;
+let pairingCode = null;
+let pairingCodeGeneratedAt = null;
+let pairingCodeRequestedFor = null;
+let pairingCodeError = null;
+
 const messageQueue = [];
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 // NORMALIZE PHONE
 function normalizePhone(phone) {
@@ -58,23 +77,55 @@ async function _sendNow(phone, message) {
 // PAIRING CODE (alternative to QR scanning)
 // --------------------------------------------------------------------------------------
 // WhatsApp's "Link with phone number" flow: instead of scanning a QR that
-// rotates every ~20-30s and can be scanned a generation too late, this asks
-// WhatsApp to generate an 8-character code tied to a specific phone number,
-// which you type into WhatsApp (Linked Devices → Link with phone number
-// instead) rather than scanning anything. There's nothing to go stale
-// between "the server generated it" and "the phone used it," so it sidesteps
-// the QR-rotation timing issue entirely. Can only be requested while the
-// socket exists and hasn't completed pairing yet.
+// rotates every ~20-30s, this asks WhatsApp to generate an 8-character code
+// tied to a specific phone number, typed into WhatsApp (Linked Devices ->
+// Link with phone number instead) rather than scanning anything.
+//
+// This forces a brand new socket generation and waits for the
+// connection.update handler to actually fire the pairing request once the
+// socket is in the right state, instead of calling
+// sock.requestPairingCode() immediately against whatever socket happens to
+// exist (which fails with "Connection Closed" if that socket's transport
+// isn't currently open — exactly what happened when calling this right
+// after a previous failed attempt left a dead socket behind).
 async function requestPairingCode(phoneNumber) {
-  if (!sock) throw new Error("socket-not-initialized");
-  if (socketReady) throw new Error("already-connected");
-
   const normalized = normalizePhone(phoneNumber);
   if (!normalized) throw new Error("invalid-phone");
+  if (socketReady) throw new Error("already-connected");
 
-  const code = await sock.requestPairingCode(normalized);
-  console.log(`🔗 Pairing code requested for ${normalized}: ${code}`);
-  return code;
+  pendingPairingPhone = normalized;
+  pairingCode = null;
+  pairingCodeGeneratedAt = null;
+  pairingCodeRequestedFor = null;
+  pairingCodeError = null;
+
+  // Detach the old socket's listeners before replacing it so a delayed
+  // event from the previous (likely already-dead) connection can't fire
+  // into this new attempt's state.
+  if (sock?.ev) {
+    sock.ev.removeAllListeners("connection.update");
+    sock.ev.removeAllListeners("creds.update");
+  }
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+
+  serviceInstance = initializeWhatsApp();
+  await serviceInstance;
+
+  const TIMEOUT_MS = 25000;
+  const start = Date.now();
+  while (Date.now() - start < TIMEOUT_MS) {
+    if (pairingCodeRequestedFor === normalized && pairingCode) {
+      return pairingCode;
+    }
+    if (pairingCodeError) {
+      throw new Error(pairingCodeError);
+    }
+    await delay(300);
+  }
+  throw new Error("timed-out-waiting-for-socket-to-be-ready");
 }
 
 // --------------------------------------------------------------------------------------
@@ -140,10 +191,6 @@ async function sendDocument(phone, filePath, fileName) {
 // back to the stale bundled version and quietly reintroduce the exact
 // "Couldn't link device" bug this function exists to avoid. Retry a few
 // times with a short delay before giving up on the live lookup.
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 async function resolveWaVersion() {
   const MAX_ATTEMPTS = 3;
 
@@ -229,11 +276,29 @@ async function initializeWhatsApp() {
       console.log("🔄 WhatsApp socket connecting...");
     }
 
+    // Fire the pending pairing-code request the moment the socket is
+    // actually in a state where WhatsApp will accept it — right as it
+    // starts connecting, or as soon as a qr comes through (both signal the
+    // transport is live and pre-auth).
+    if ((connection === "connecting" || qr) && pendingPairingPhone && pairingCodeRequestedFor !== pendingPairingPhone) {
+      try {
+        const code = await sock.requestPairingCode(pendingPairingPhone);
+        pairingCode = code;
+        pairingCodeGeneratedAt = Date.now();
+        pairingCodeRequestedFor = pendingPairingPhone;
+        console.log(`🔗 Pairing code for ${pendingPairingPhone}: ${code}`);
+      } catch (error) {
+        pairingCodeError = error.message;
+        console.error(`❌ Failed to request pairing code for ${pendingPairingPhone}:`, error.message);
+      }
+    }
+
     if (connection === "open") {
       console.log("✅ WhatsApp connected successfully!");
       socketReady = true;
       qrBase64 = null;
       qrGeneratedAt = null;
+      pendingPairingPhone = null;
 
       flushQueue();
     }
@@ -302,6 +367,7 @@ function getStatus() {
     hasQR: !!qrBase64,
     qrAgeSeconds: qrGeneratedAt ? Math.round((Date.now() - qrGeneratedAt) / 1000) : null,
     qrCount,
+    pairingCodePending: !!pendingPairingPhone && !pairingCode,
   };
 }
 
