@@ -19,6 +19,8 @@ if (!fs.existsSync(AUTH_DIR)) fs.mkdirSync(AUTH_DIR, { recursive: true });
 
 let sock = null;
 let qrBase64 = null;
+let qrGeneratedAt = null;
+let qrCount = 0;
 let socketReady = false;
 let initializing = false;
 let serviceInstance = null;
@@ -108,22 +110,46 @@ async function sendDocument(phone, filePath, fileName) {
 // serving, which is what actually needs to match for new-device pairing to
 // succeed. Fall back to fetchLatestBaileysVersion() only if that lookup
 // itself fails (e.g. no outbound internet to web.whatsapp.com yet).
+//
+// This server has a known intermittent DNS issue (the same box occasionally
+// fails SRV lookups for MongoDB Atlas with ESERVFAIL). If that flakiness
+// also hits this HTTPS call, a single failed attempt would silently fall
+// back to the stale bundled version and quietly reintroduce the exact
+// "Couldn't link device" bug this function exists to avoid. Retry a few
+// times with a short delay before giving up on the live lookup.
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function resolveWaVersion() {
-  try {
-    const result = await fetchLatestWaWebVersion({});
-    if (result?.version) {
-      console.log(
-        `📦 Using live WhatsApp Web version: ${result.version.join(".")} (isLatest: ${result.isLatest})`,
+  const MAX_ATTEMPTS = 3;
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const result = await fetchLatestWaWebVersion({});
+      if (result?.version) {
+        console.log(
+          `📦 Using live WhatsApp Web version: ${result.version.join(".")} (isLatest: ${result.isLatest})`,
+        );
+        return result.version;
+      }
+      throw new Error("fetchLatestWaWebVersion returned no version");
+    } catch (error) {
+      console.warn(
+        `⚠️  fetchLatestWaWebVersion failed (attempt ${attempt}/${MAX_ATTEMPTS}): ${error.message}`,
       );
-      return result.version;
+      if (attempt < MAX_ATTEMPTS) {
+        await delay(1500 * attempt);
+      }
     }
-  } catch (error) {
-    console.warn("⚠️  fetchLatestWaWebVersion failed, falling back:", error.message);
   }
 
   const fallback = await fetchLatestBaileysVersion();
-  console.log(
-    `📦 Using Baileys-pinned WhatsApp Web version: ${fallback.version.join(".")} (isLatest: ${fallback.isLatest})`,
+  console.warn(
+    `📦 Live version lookup failed ${MAX_ATTEMPTS} times — falling back to Baileys-pinned ` +
+    `version: ${fallback.version.join(".")} (isLatest: ${fallback.isLatest}). ` +
+    `If linking fails again right after this message, the network path to ` +
+    `web.whatsapp.com is the thing to fix, not the pairing logic.`,
   );
   return fallback.version;
 }
@@ -170,14 +196,21 @@ async function initializeWhatsApp() {
 
     if (qr) {
       qrBase64 = await QRCode.toDataURL(qr);
-      console.log("📱 QR Generated at", new Date().toISOString());
+      qrGeneratedAt = Date.now();
+      qrCount += 1;
+      console.log(`📱 QR #${qrCount} generated at`, new Date(qrGeneratedAt).toISOString());
       socketReady = false;
+    }
+
+    if (connection === "connecting") {
+      console.log("🔄 WhatsApp socket connecting...");
     }
 
     if (connection === "open") {
       console.log("✅ WhatsApp connected successfully!");
       socketReady = true;
       qrBase64 = null;
+      qrGeneratedAt = null;
 
       flushQueue();
     }
@@ -226,6 +259,16 @@ async function initializeWhatsApp() {
 // HELPERS RETURNED TO ROUTES
 // --------------------------------------------------------------------------------------
 function getQR() {
+  if (qrBase64 && qrGeneratedAt) {
+    const ageSeconds = Math.round((Date.now() - qrGeneratedAt) / 1000);
+    if (ageSeconds > 25) {
+      console.warn(
+        `⚠️  Serving QR #${qrCount} that is already ${ageSeconds}s old — Baileys rotates ` +
+        `QR codes roughly every 20-30s, so this one may already be dead. If pairing keeps ` +
+        `failing right after a scan, check how often the client re-fetches /qr.`,
+      );
+    }
+  }
   return qrBase64;
 }
 
@@ -234,6 +277,8 @@ function getStatus() {
     isConnected: socketReady,
     socketReady,
     hasQR: !!qrBase64,
+    qrAgeSeconds: qrGeneratedAt ? Math.round((Date.now() - qrGeneratedAt) / 1000) : null,
+    qrCount,
   };
 }
 
