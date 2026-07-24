@@ -34,8 +34,20 @@ async function connect() {
     console.log("✅ Connected to MikroTik successfully");
     return conn;
   } catch (error) {
-    console.error("❌ MikroTik connection error:", error.message);
-    throw new Error(`Failed to connect to MikroTik: ${error.message}`);
+    // node-routeros' own connection-timeout/refused errors sometimes carry
+    // no .message at all (just an error `code`/`errno`, or nothing), which
+    // is why this used to log "MikroTik connection error: " with nothing
+    // after the colon -- impossible to tell ECONNREFUSED from ETIMEDOUT
+    // from an auth failure. Log everything we can get out of it instead.
+    const details =
+      error?.message ||
+      error?.code ||
+      error?.errno ||
+      (typeof error === "string" ? error : null) ||
+      JSON.stringify(error, Object.getOwnPropertyNames(error || {})) ||
+      "Unknown error (no message/code on the thrown error object)";
+    console.error(`❌ MikroTik connection error [host=${host} port=${port}]:`, details);
+    throw new Error(`Failed to connect to MikroTik at ${host}:${port}: ${details}`);
   }
 }
 
