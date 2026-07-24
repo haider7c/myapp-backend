@@ -65,7 +65,15 @@ async function startServer() {
   // Load schedulers only after MongoDB is ready so background jobs never
   // run a query against a not-yet-connected instance.
   require("./cron/reminderScheduler");
-  require("./cron/mikrotikExpiryScheduler");
+
+  // Automatic MikroTik expiry enable/disable is intentionally NOT loaded
+  // anymore -- the owner wants to enable/disable each customer's internet
+  // manually instead of it happening automatically at noon based on
+  // billReceiveDate. The underlying router logic (services/mikrotikService.js)
+  // and its manual routes (routes/mikrotikRoutes.js, mounted at /api/mikrotik
+  // above) are untouched and still fully working -- only the automatic daily
+  // cron trigger (cron/mikrotikExpiryScheduler.js) is disabled. That file is
+  // left in place, unused, in case automatic scheduling is ever wanted again.
 
   const PORT = process.env.PORT || 5000;
   app.listen(PORT, () => console.log(`🚀 Server running on ${PORT}`));
