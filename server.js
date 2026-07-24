@@ -28,6 +28,7 @@ app.use("/api/services", require("./routes/serviceRoutes"));
 app.use("/api/areas", require("./routes/areaRoutes"));
 app.use("/api/employees", require("./routes/employeeRoutes"));
 app.use("/api/mikrotik", require("./routes/mikrotikRoutes"));
+app.use("/api/activitylog", require("./routes/activityLogRoutes"));
 
 // Ported from the desktop billing app so both the mobile app and the
 // desktop app read/write the same invoice/inventory/receipt-branding data.

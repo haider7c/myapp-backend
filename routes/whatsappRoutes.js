@@ -5,6 +5,9 @@ const router = express.Router();
 const createWhatsAppService = require("../services/whatsappService");
 const ExpiryChecker = require("../services/expiryChecker");
 const BillStatus = require("../models/BillStatus");
+const Customer = require("../models/Customer");
+const auth = require("../middleware/auth");
+const { logActivity } = require("../services/activityLogger");
 
 // create ONE INSTANCE shared for all routes
 const whatsappServicePromise = createWhatsAppService();
@@ -60,7 +63,7 @@ router.post("/send-document", async (req, res) => {
 
 // Kept as an alias of /send for compatibility with the desktop app's
 // existing "send-test" client call (same behavior as /send).
-router.post("/send-test", async (req, res) => {
+router.post("/send-test", auth, async (req, res) => {
   try {
     const service = await whatsappServicePromise;
     const { phone, message } = req.body;
@@ -71,39 +74,67 @@ router.post("/send-test", async (req, res) => {
       return res.status(503).json({ success: false, error: "WhatsApp is not connected. Please scan the QR code first." });
     }
     const result = await service.sendMessage(phone, message);
+    if (result.success) {
+      logActivity({
+        type: "whatsapp_sent",
+        reqUser: req.user,
+        message: `Sent WhatsApp test message to ${phone}`,
+        details: { phone, message, kind: "test" },
+      });
+    }
     res.json(result);
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-router.post("/send-expiry-reminder/:customerId", async (req, res) => {
+router.post("/send-expiry-reminder/:customerId", auth, async (req, res) => {
   try {
     const service = await whatsappServicePromise;
     if (!service.getStatus().isConnected) {
       return res.status(503).json({ success: false, error: "WhatsApp is not connected" });
     }
     const result = await expiryChecker.sendExpiryReminder(req.params.customerId);
+    if (result.success) {
+      const customer = await Customer.findById(req.params.customerId).catch(() => null);
+      logActivity({
+        type: "whatsapp_sent",
+        reqUser: req.user,
+        customer,
+        message: `Sent expiry reminder to ${customer?.customerName || "customer"}`,
+        details: { kind: "expiry_reminder" },
+      });
+    }
     res.json(result);
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-router.post("/send-bill-reminder/:customerId", async (req, res) => {
+router.post("/send-bill-reminder/:customerId", auth, async (req, res) => {
   try {
     const service = await whatsappServicePromise;
     if (!service.getStatus().isConnected) {
       return res.status(503).json({ success: false, error: "WhatsApp is not connected" });
     }
     const result = await expiryChecker.sendBillReminder(req.params.customerId);
+    if (result.success) {
+      const customer = await Customer.findById(req.params.customerId).catch(() => null);
+      logActivity({
+        type: "whatsapp_sent",
+        reqUser: req.user,
+        customer,
+        message: `Sent bill reminder to ${customer?.customerName || "customer"}`,
+        details: { kind: "bill_reminder" },
+      });
+    }
     res.json(result);
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-router.post("/send-payment-receipt/:customerId", async (req, res) => {
+router.post("/send-payment-receipt/:customerId", auth, async (req, res) => {
   try {
     const service = await whatsappServicePromise;
     if (!service.getStatus().isConnected) {
@@ -111,6 +142,16 @@ router.post("/send-payment-receipt/:customerId", async (req, res) => {
     }
     const { amount, method, transactionId } = req.body;
     const result = await expiryChecker.sendPaymentReceipt(req.params.customerId, { amount, method, transactionId });
+    if (result.success) {
+      const customer = await Customer.findById(req.params.customerId).catch(() => null);
+      logActivity({
+        type: "whatsapp_sent",
+        reqUser: req.user,
+        customer,
+        message: `Sent payment receipt to ${customer?.customerName || "customer"}${amount ? ` (Rs. ${amount})` : ""}`,
+        details: { kind: "payment_receipt", amount, method, transactionId },
+      });
+    }
     res.json(result);
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });

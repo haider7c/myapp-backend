@@ -2,6 +2,10 @@
 const express = require("express");
 const router = express.Router();
 
+const Customer = require("../models/Customer");
+const auth = require("../middleware/auth");
+const { logActivity } = require("../services/activityLogger");
+
 const {
   getPPPoEUsers,
   getActiveUsers,
@@ -437,10 +441,20 @@ router.post("/users/status", async (req, res) => {
 });
 
 // Enable user by username
-router.post("/user/enable-by-username/:username", async (req, res) => {
+router.post("/user/enable-by-username/:username", auth, async (req, res) => {
   try {
     const username = req.params.username;
     const result = await enablePPPoEUserByUsername(username);
+    if (result.success) {
+      const customer = await Customer.findOne({ customerId: username }).catch(() => null);
+      logActivity({
+        type: "internet_enabled",
+        reqUser: req.user,
+        customer,
+        message: `Enabled internet for ${customer?.customerName || username} (${username})`,
+        details: { username, alreadyApplied: !!result.alreadyApplied },
+      });
+    }
     res.json(result);
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -448,10 +462,20 @@ router.post("/user/enable-by-username/:username", async (req, res) => {
 });
 
 // Disable user by username
-router.post("/user/disable-by-username/:username", async (req, res) => {
+router.post("/user/disable-by-username/:username", auth, async (req, res) => {
   try {
     const username = req.params.username;
     const result = await disablePPPoEUserByUsername(username);
+    if (result.success) {
+      const customer = await Customer.findOne({ customerId: username }).catch(() => null);
+      logActivity({
+        type: "internet_disabled",
+        reqUser: req.user,
+        customer,
+        message: `Disabled internet for ${customer?.customerName || username} (${username})`,
+        details: { username, alreadyApplied: !!result.alreadyApplied },
+      });
+    }
     res.json(result);
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });

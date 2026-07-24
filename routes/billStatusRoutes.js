@@ -2,6 +2,9 @@
 const express = require('express');
 const router = express.Router();
 const BillStatus = require('../models/BillStatus');
+const Customer = require('../models/Customer');
+const auth = require('../middleware/auth');
+const { logActivity } = require('../services/activityLogger');
 
 // GET all bill statuses
 router.get('/', async (req, res) => {
@@ -147,7 +150,7 @@ router.patch("/mark-unpaid/:id", async (req, res) => {
 // Mark as paid (safe - no duplicates). transactionId/paymentAmount/paymentDate
 // are optional and only used by the desktop app's payment-recording flow —
 // existing callers that don't send them behave exactly as before.
-router.patch("/mark-paid", async (req, res) => {
+router.patch("/mark-paid", auth, async (req, res) => {
   try {
     const {
       customerId,
@@ -172,6 +175,8 @@ router.patch("/mark-paid", async (req, res) => {
 
     // check if exists
     let existing = await BillStatus.findOne({ customerId, month, year });
+    const customer = await Customer.findById(customerId).catch(() => null);
+    const amountForLog = paymentAmount ?? customer?.amount ?? null;
 
     if (existing) {
       existing.billStatus = true;
@@ -182,6 +187,14 @@ router.patch("/mark-paid", async (req, res) => {
       Object.assign(existing, extra);
 
       await existing.save();
+
+      logActivity({
+        type: "bill_payment",
+        reqUser: req.user,
+        customer,
+        message: `Payment received from ${customer?.customerName || "customer"}${amountForLog ? ` (Rs. ${amountForLog})` : ""}`,
+        details: { amount: amountForLog, method: paymentMethod, month, year, transactionId, source: "billstatus.mark-paid" },
+      });
 
       return res.json({
         success: true,
@@ -200,6 +213,14 @@ router.patch("/mark-paid", async (req, res) => {
       paymentNote,
       billReceivedAt: new Date(),
       ...extra,
+    });
+
+    logActivity({
+      type: "bill_payment",
+      reqUser: req.user,
+      customer,
+      message: `Payment received from ${customer?.customerName || "customer"}${amountForLog ? ` (Rs. ${amountForLog})` : ""}`,
+      details: { amount: amountForLog, method: paymentMethod, month, year, transactionId, source: "billstatus.mark-paid" },
     });
 
     return res.json({

@@ -4,6 +4,7 @@ const Customer = require("../models/Customer");
 const Area = require("../models/Area");
 const Service = require("../models/Service");
 const auth = require("../middleware/auth");
+const { logActivity } = require("../services/activityLogger");
 
 // The desktop billing app doesn't have an Area/Service concept and never
 // sends areaId/serviceId when creating a customer. Rather than reject those
@@ -164,6 +165,15 @@ router.put("/:id/discontinue", auth, async (req, res) => {
       .populate("serviceId", "name")
       .populate("assignedEmployeeId", "name");
 
+    if (customer) {
+      logActivity({
+        type: "customer_discontinued",
+        reqUser: req.user,
+        customer,
+        message: `Discontinued customer ${customer.customerName} (${customer.customerId || "no ID"})`,
+      });
+    }
+
     res.json({
       message: "Customer discontinued successfully",
       customer,
@@ -259,6 +269,13 @@ router.post("/", auth, async (req, res) => {
       .populate("areaId", "name")
       .populate("serviceId", "name")
       .populate("assignedEmployeeId", "name");
+
+    logActivity({
+      type: "customer_created",
+      reqUser: req.user,
+      customer: populatedCustomer,
+      message: `Created customer ${populatedCustomer.customerName} (${populatedCustomer.customerId || "no ID"})`,
+    });
 
     res.status(201).json({
       message: "Customer created successfully",
@@ -432,6 +449,13 @@ router.put("/:id", auth, async (req, res) => {
       return res.status(404).json({ message: "Customer not found" });
     }
 
+    logActivity({
+      type: "customer_updated",
+      reqUser: req.user,
+      customer: updatedCustomer,
+      message: `Updated customer ${updatedCustomer.customerName} (${updatedCustomer.customerId || "no ID"})`,
+    });
+
     res.json({
       message: "Customer updated successfully",
       customer: updatedCustomer,
@@ -507,6 +531,14 @@ router.put("/:id/mark-paid", auth, async (req, res) => {
       .populate("areaId", "name")
       .populate("serviceId", "name")
       .populate("assignedEmployeeId", "name");
+
+    logActivity({
+      type: "bill_payment",
+      reqUser: req.user,
+      customer: updatedCustomer,
+      message: `Payment received from ${updatedCustomer.customerName} (Rs. ${req.body.amount || customer.amount})`,
+      details: { amount: req.body.amount || customer.amount, source: "customer.mark-paid" },
+    });
 
     res.json({
       message: "Payment marked as received successfully",
