@@ -15,12 +15,15 @@ router.get("/", auth, async (req, res) => {
       return res.json({ success: true, items: [], total: 0, page: 1, pages: 0 });
     }
 
-    const { type, date } = req.query;
+    const { type, date, customerId } = req.query;
     const page = Math.max(parseInt(req.query.page) || 1, 1);
     const limit = Math.min(Math.max(parseInt(req.query.limit) || 30, 1), 100);
 
     const query = { ownerId };
     if (type) query.type = type;
+    // Optional: scope to one customer's activity -- used by the Customer
+    // Management page's per-customer Activity Log tab.
+    if (customerId) query.customerId = customerId;
 
     // date="YYYY-MM-DD" filters that single calendar day; omit for "all
     // previous activity" (still newest-first, paginated).
