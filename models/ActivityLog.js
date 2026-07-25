@@ -20,6 +20,19 @@ const activityLogSchema = new mongoose.Schema(
         "customer_updated",
         "customer_discontinued",
         "whatsapp_sent",
+        // Billing & Customer Management module additions
+        "invoice_generated",
+        "payment_received",
+        "payment_reversed",
+        "discount_applied",
+        "manual_due_added",
+        "late_fee_added",
+        "charges_waived",
+        "advance_payment_received",
+        "package_changed",
+        "status_changed",
+        "receipt_printed",
+        "note_added",
       ],
       index: true,
     },
@@ -50,6 +63,13 @@ const activityLogSchema = new mongoose.Schema(
     // specific to that activity type (amount, method, message text, etc.)
     message: { type: String, default: "" },
     details: { type: mongoose.Schema.Types.Mixed, default: {} },
+
+    // Full audit trail fields for financial actions (req 15). Optional --
+    // existing log entries and callers that don't pass these are unaffected.
+    previousValue: { type: mongoose.Schema.Types.Mixed, default: null },
+    newValue: { type: mongoose.Schema.Types.Mixed, default: null },
+    ipAddress: { type: String, default: "" },
+    deviceInfo: { type: String, default: "" },
   },
   { timestamps: true },
 );

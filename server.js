@@ -30,6 +30,14 @@ app.use("/api/employees", require("./routes/employeeRoutes"));
 app.use("/api/mikrotik", require("./routes/mikrotikRoutes"));
 app.use("/api/activitylog", require("./routes/activityLogRoutes"));
 
+// Billing & Customer Management module (invoices/payments/notes) -- new
+// system layered alongside the existing /api/billstatuses routes, which are
+// left completely untouched so nothing currently deployed breaks. See
+// backend/scripts/migrateBillStatusToInvoices.js for the one-time backfill.
+app.use("/api/invoices", require("./routes/invoiceRoutes"));
+app.use("/api/payments", require("./routes/paymentRoutes"));
+app.use("/api/customer-notes", require("./routes/customerNoteRoutes"));
+
 // Ported from the desktop billing app so both the mobile app and the
 // desktop app read/write the same invoice/inventory/receipt-branding data.
 app.use("/api/inventory", require("./routes/inventoryRoutes"));

@@ -43,8 +43,11 @@ async function resolveOwnerAndActor(reqUser) {
  * @param {string} params.message - short human-readable summary line
  * @param {Object} [params.details] - extra type-specific data (amount, method, phone, etc.)
  * @param {string} [params.ownerIdOverride] - use this ownerId directly instead of resolving from reqUser (e.g. resolved from the customer record when reqUser has no tenant info)
+ * @param {*} [params.previousValue] - full audit trail (req 15): value before the change
+ * @param {*} [params.newValue] - full audit trail: value after the change
+ * @param {Object} [params.req] - the Express request object, used to capture IP/device for the audit trail. Optional -- omit for routes/background jobs with no request context.
  */
-async function logActivity({ type, reqUser, customer, message, details, ownerIdOverride }) {
+async function logActivity({ type, reqUser, customer, message, details, ownerIdOverride, previousValue, newValue, req }) {
   try {
     const { ownerId, performedById, performedByName, performedByRole } = await resolveOwnerAndActor(reqUser);
     const resolvedOwnerId = ownerIdOverride || ownerId || customer?.ownerId || null;
@@ -53,6 +56,9 @@ async function logActivity({ type, reqUser, customer, message, details, ownerIdO
       console.warn(`⚠️ Skipped activity log (no ownerId resolvable) for type=${type}: ${message}`);
       return;
     }
+
+    const ipAddress = req ? (req.headers?.["x-forwarded-for"]?.split(",")[0]?.trim() || req.socket?.remoteAddress || "") : "";
+    const deviceInfo = req ? (req.headers?.["user-agent"] || "") : "";
 
     await ActivityLog.create({
       type,
@@ -65,6 +71,10 @@ async function logActivity({ type, reqUser, customer, message, details, ownerIdO
       performedByRole,
       message,
       details: details || {},
+      previousValue: previousValue !== undefined ? previousValue : null,
+      newValue: newValue !== undefined ? newValue : null,
+      ipAddress,
+      deviceInfo,
     });
   } catch (err) {
     console.error("❌ Failed to write activity log:", err.message);
