@@ -33,19 +33,60 @@ const messageQueue = [];
 
 // NORMALIZE PHONE (same rules as before, output format changes to match
 // whatsapp-web.js's @c.us JID suffix instead of Baileys' @s.whatsapp.net)
+//
+// Handles a data-entry mistake that was silently breaking sends for some
+// customers: staff sometimes save a number as "+92 0300-1234567" — country
+// code AND the local leading 0 both present — which used to produce 13
+// digits ("9203001234567") and get rejected outright as invalid, because
+// the old code only stripped a leading zero at the very start of the
+// string, not the one sitting right after "92". That number never even
+// reached WhatsApp, even though the number itself is perfectly valid and
+// registered.
 function normalizePhone(phone) {
   if (!phone) return null;
   let cleaned = phone.toString().replace(/\D/g, "");
-  cleaned = cleaned.replace(/^0+/, "");
-  if (!cleaned.startsWith("92") && cleaned.length === 10) {
-    cleaned = "92" + cleaned;
+  if (!cleaned) return null;
+
+  // "0092..." international-dialing prefix -> "92..."
+  if (cleaned.startsWith("00")) {
+    cleaned = cleaned.slice(2);
   }
-  if (cleaned.length !== 12) return null;
+
+  // "920300XXXXXXX" (13 digits: country code + stray local 0 + 10-digit
+  // subscriber number) -> drop the stray 0 right after the country code.
+  if (cleaned.startsWith("920") && cleaned.length === 13) {
+    cleaned = "92" + cleaned.slice(3);
+  }
+
+  // Local format ("0300XXXXXXX") -> strip the leading 0(s), then add 92.
+  if (!cleaned.startsWith("92")) {
+    cleaned = cleaned.replace(/^0+/, "");
+    if (cleaned.length === 10) {
+      cleaned = "92" + cleaned;
+    }
+  }
+
+  if (!cleaned.startsWith("92") || cleaned.length !== 12) return null;
   return cleaned;
 }
 
 function toChatId(normalizedPhone) {
   return `${normalizedPhone}@c.us`;
+}
+
+// Resolves the actual WhatsApp ID for a normalized phone number instead of
+// blindly guessing "<number>@c.us". This is what whatsapp-web.js itself
+// recommends (Client.getNumberId) — it queries WhatsApp directly, so it
+// (a) confirms the number is actually registered on WhatsApp, giving a
+// clear "not registered" error instead of a silent no-op/failure, and
+// (b) returns the real serialized ID for numbers where the guessed
+// "<digits>@c.us" doesn't match what WhatsApp expects.
+async function resolveChatId(normalizedPhone) {
+  const numberId = await client.getNumberId(normalizedPhone);
+  if (!numberId) {
+    throw new Error(`Number is not registered on WhatsApp: ${normalizedPhone}`);
+  }
+  return numberId._serialized;
 }
 
 // --------------------------------------------------------------------------------------
@@ -55,9 +96,21 @@ async function _sendNow(phone, message) {
   if (!client || !isReady) throw new Error("socket-not-ready");
 
   const normalized = normalizePhone(phone);
-  if (!normalized) throw new Error("invalid-phone");
+  if (!normalized) {
+    console.error(`❌ WhatsApp send skipped — could not normalize phone: "${phone}"`);
+    throw new Error("invalid-phone");
+  }
 
-  return client.sendMessage(toChatId(normalized), message);
+  try {
+    const chatId = await resolveChatId(normalized);
+    return await client.sendMessage(chatId, message);
+  } catch (err) {
+    // Log the raw phone + normalized number alongside the real error so a
+    // "some contacts don't get the message" report can be traced back to a
+    // specific number/reason instead of a generic failure.
+    console.error(`❌ WhatsApp send failed for "${phone}" (normalized: ${normalized}):`, err.message);
+    throw err;
+  }
 }
 
 // --------------------------------------------------------------------------------------
@@ -99,7 +152,8 @@ async function sendDocument(phone, filePath, fileName) {
   const media = MessageMedia.fromFilePath(filePath);
   if (fileName) media.filename = fileName;
 
-  return client.sendMessage(toChatId(normalized), media);
+  const chatId = await resolveChatId(normalized);
+  return client.sendMessage(chatId, media);
 }
 
 // --------------------------------------------------------------------------------------
