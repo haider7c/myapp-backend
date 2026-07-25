@@ -83,27 +83,58 @@ Your ISP Team 🌐`;
     }
   }
 
-  async sendBillReminder(customerId) {
+  // `force: true` skips the "must be exactly today's bill day" gate — used
+  // by the manual "Send Reminder" button on the billing page, which can be
+  // clicked for any unpaid customer (due today, overdue, or upcoming), not
+  // just the ones the daily cron job (checkDueTodayPackages) already
+  // pre-filtered to billReceiveDate === today. The message wording adapts
+  // to whether the bill is due today, already overdue, or still upcoming.
+  async sendBillReminder(customerId, options = {}) {
+    const { force = false } = options;
     try {
       const customer = await Customer.findById(customerId);
       if (!customer) throw new Error("Customer not found");
       if (!customer.phone) throw new Error("Customer phone number not found");
 
-      if (!isPackageExpiringToday(customer)) {
+      if (!force && !isPackageExpiringToday(customer)) {
         return { success: false, error: "Today is not the bill due date" };
       }
 
       const service = await this.whatsappServicePromise;
-      const message = `📋 *Monthly Bill Reminder*
+
+      const todayDay = new Date().getDate();
+      const billDay = parseInt(customer.billReceiveDate);
+      const isToday = billDay === todayDay;
+      const isOverdue = billDay < todayDay;
+
+      const headline = isToday
+        ? "📋 *Monthly Bill Reminder*"
+        : isOverdue
+        ? "⚠️ *Overdue Bill Reminder*"
+        : "📋 *Upcoming Bill Reminder*";
+
+      const dueDateLine = isToday
+        ? `📅 Due Date: Today (Day ${customer.billReceiveDate})`
+        : isOverdue
+        ? `📅 Due Date: Day ${customer.billReceiveDate} (overdue)`
+        : `📅 Due Date: Day ${customer.billReceiveDate} of this month`;
+
+      const intro = isToday
+        ? "This is a friendly reminder that your monthly bill is due today."
+        : isOverdue
+        ? "This is a friendly reminder that your monthly bill is now overdue."
+        : "This is a friendly reminder about your upcoming monthly bill.";
+
+      const message = `${headline}
 
 Dear ${customer.customerName},
 
-This is a friendly reminder that your monthly bill is due today.
+${intro}
 
 *Bill Details:*
 📦 Package: ${customer.packageName}
 💰 Amount: Rs. ${customer.amount}
-📅 Due Date: Today (Day ${customer.billReceiveDate})
+${dueDateLine}
 
 Please make the payment at your earliest convenience to avoid any service interruption.
 

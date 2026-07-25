@@ -117,7 +117,11 @@ router.post("/send-bill-reminder/:customerId", auth, async (req, res) => {
     if (!service.getStatus().isConnected) {
       return res.status(503).json({ success: false, error: "WhatsApp is not connected" });
     }
-    const result = await expiryChecker.sendBillReminder(req.params.customerId);
+    // This route is only ever hit by the manual "Send Reminder" button
+    // (billing page, any unpaid customer) — not by the daily cron, which
+    // calls expiryChecker.sendBillReminder() directly in a loop. So it
+    // always forces the send regardless of whether the bill day is today.
+    const result = await expiryChecker.sendBillReminder(req.params.customerId, { force: true });
     if (result.success) {
       const customer = await Customer.findById(req.params.customerId).catch(() => null);
       logActivity({
