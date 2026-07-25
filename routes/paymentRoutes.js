@@ -4,8 +4,10 @@ const express = require("express");
 const router = express.Router();
 const Payment = require("../models/Payment");
 const Customer = require("../models/Customer");
+const User = require("../models/User");
 const auth = require("../middleware/auth");
 const billingEngine = require("../services/billingEngine");
+const { logActivity } = require("../services/activityLogger");
 
 function ownerScope(req) {
   return req.user.role === "owner" ? req.user.id : req.user.ownerId;
@@ -57,6 +59,43 @@ router.post("/:id/reverse", auth, requireOwner, async (req, res) => {
       req,
     });
     res.json({ success: true, ...result });
+  } catch (error) {
+    res.status(400).json({ success: false, error: error.message });
+  }
+});
+
+// POST /:id/log-share -- Receipt Sharing/History (req 10, 12). Records that
+// a receipt was sent/shared and via what channel, WITHOUT touching the
+// existing "Send via WhatsApp" flow at all (that keeps calling
+// /api/whatsapp/send-payment-receipt exactly as before) -- this is purely
+// an additive history entry the new "Share Receipt" button (and, going
+// forward, the WhatsApp button too if the UI chooses to call it) reports
+// to, so Receipt History always reflects every channel a receipt went out
+// through.
+router.post("/:id/log-share", auth, async (req, res) => {
+  try {
+    const { via } = req.body; // e.g. "whatsapp" | "share_sheet" | "email" | "download"
+    const payment = await Payment.findById(req.params.id);
+    if (!payment) return res.status(404).json({ success: false, error: "Payment not found" });
+
+    const user = await User.findById(req.user.id).select("name");
+    payment.sentAt = new Date();
+    payment.sentBy = req.user.id;
+    payment.sentByName = user?.name || "";
+    if (via && !payment.sharedVia.includes(via)) payment.sharedVia.push(via);
+    await payment.save();
+
+    const customer = await Customer.findById(payment.customerId);
+    logActivity({
+      type: "receipt_shared",
+      reqUser: req.user,
+      req,
+      customer,
+      message: `Shared receipt ${payment.receiptNumber} via ${via || "unknown channel"}`,
+      details: { via, receiptNumber: payment.receiptNumber },
+    });
+
+    res.json({ success: true, payment });
   } catch (error) {
     res.status(400).json({ success: false, error: error.message });
   }

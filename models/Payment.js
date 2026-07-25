@@ -44,6 +44,15 @@ const paymentSchema = new mongoose.Schema(
     reversedAt: { type: Date, default: null },
     reversedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
     reversalReason: { type: String, default: "" },
+
+    // Receipt History (req 12) -- every Payment doc already carries
+    // receiptNumber/invoice-month-via-allocations/generatedDate(createdAt),
+    // so these are the only additional fields needed rather than a
+    // duplicate ReceiptHistory collection. Nothing here is ever deleted.
+    sentAt: { type: Date, default: null },
+    sentBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    sentByName: { type: String, default: "" },
+    sharedVia: { type: [String], default: [] }, // e.g. ["whatsapp", "share_sheet", "email"]
   },
   { timestamps: true }
 );

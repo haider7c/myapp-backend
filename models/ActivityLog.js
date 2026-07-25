@@ -33,6 +33,13 @@ const activityLogSchema = new mongoose.Schema(
         "status_changed",
         "receipt_printed",
         "note_added",
+        // Reminder Messages & Receipt Management module additions
+        "reminder_template_updated",
+        "reminder_template_restored",
+        "reminder_template_duplicated",
+        "reminder_template_toggled",
+        "receipt_settings_updated",
+        "receipt_shared",
       ],
       index: true,
     },

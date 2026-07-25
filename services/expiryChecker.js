@@ -5,7 +5,37 @@
 // templating logic lives in this file instead, so the shared
 // services/whatsappService.js (used by the mobile app too) doesn't need to
 // change at all.
+//
+// Reminder Messages module: each of the three message-producing methods
+// below now first looks up the tenant's admin-editable ReminderTemplate for
+// its exact triggerKey (see models/ReminderTemplate.js for what each key
+// means) and sends that instead, if one exists and is enabled. If no
+// template is found (e.g. migration hasn't run yet for this owner), it
+// falls back to the original hardcoded text below so a message is never
+// silently skipped -- this is the ONLY thing that changed in this file;
+// the hardcoded strings are kept as-is, now serving purely as the fallback
+// and as the literal seed text for scripts/migrateReminderTemplates.js.
 const Customer = require("../models/Customer");
+const ReminderTemplate = require("../models/ReminderTemplate");
+const ReceiptSettings = require("../models/ReceiptSettings");
+const { renderTemplate } = require("./templateEngine");
+
+async function getActiveTemplate(ownerId, triggerKey) {
+  if (!ownerId) return null;
+  try {
+    return await ReminderTemplate.findOne({ ownerId, triggerKey, enabled: true, isActive: true });
+  } catch (err) {
+    return null;
+  }
+}
+
+async function getReceiptSettingsFor(ownerId) {
+  try {
+    return (await ReceiptSettings.findOne({ ownerId })) || (await ReceiptSettings.findOne({ ownerId: null, key: "default" })) || {};
+  } catch (err) {
+    return {};
+  }
+}
 
 function isPackageExpiringTomorrow(customer) {
   if (!customer || !customer.billReceiveDate) return false;
@@ -37,7 +67,22 @@ class ExpiryChecker {
       const service = await this.whatsappServicePromise;
 
       let message = null;
-      if (isPackageExpiringTomorrow(customer)) {
+      const triggerKey = isPackageExpiringTomorrow(customer) ? "expiry_tomorrow" : isPackageExpiringToday(customer) ? "expiry_today" : null;
+      if (triggerKey) {
+        const template = await getActiveTemplate(customer.ownerId, triggerKey);
+        if (template) {
+          const receiptSettings = await getReceiptSettingsFor(customer.ownerId);
+          const dueDateOverride =
+            triggerKey === "expiry_tomorrow"
+              ? `Day ${customer.billReceiveDate} of every month`
+              : `TODAY (Day ${customer.billReceiveDate})`;
+          message = renderTemplate(template, { customer, receiptSettings, dueDateOverride });
+        }
+      }
+
+      if (message) {
+        // Template-driven message resolved above; fall through to send.
+      } else if (isPackageExpiringTomorrow(customer)) {
         message = `🔔 *Package Expiry Reminder*
 
 Dear ${customer.customerName},
@@ -125,7 +170,20 @@ Your ISP Team 🌐`;
         ? "This is a friendly reminder that your monthly bill is now overdue."
         : "This is a friendly reminder about your upcoming monthly bill.";
 
-      const message = `${headline}
+      const billTriggerKey = isToday ? "bill_due_today" : isOverdue ? "bill_overdue" : "bill_upcoming";
+      const billTemplate = await getActiveTemplate(customer.ownerId, billTriggerKey);
+
+      let message;
+      if (billTemplate) {
+        const receiptSettings = await getReceiptSettingsFor(customer.ownerId);
+        const dueDateOverride = isToday
+          ? `Today (Day ${customer.billReceiveDate})`
+          : isOverdue
+          ? `Day ${customer.billReceiveDate} (overdue)`
+          : `Day ${customer.billReceiveDate} of this month`;
+        message = renderTemplate(billTemplate, { customer, receiptSettings, dueDateOverride });
+      } else {
+        message = `${headline}
 
 Dear ${customer.customerName},
 
@@ -142,6 +200,7 @@ Thank you for your prompt attention.
 
 Best regards,
 Your ISP Team 🌐`;
+      }
 
       return await service.sendMessage(customer.phone, message);
     } catch (error) {
@@ -156,7 +215,26 @@ Your ISP Team 🌐`;
       if (!customer.phone) throw new Error("Customer phone number not found");
 
       const service = await this.whatsappServicePromise;
-      const message = `✅ *Payment Received - Thank You!*
+
+      const receiptTemplate = await getActiveTemplate(customer.ownerId, "payment_received");
+      let message;
+      if (receiptTemplate) {
+        const receiptSettings = await getReceiptSettingsFor(customer.ownerId);
+        const paymentShim = {
+          paymentMethod: paymentDetails.method,
+          transactionId: paymentDetails.transactionId,
+          receiptNumber: paymentDetails.receiptNumber,
+          paymentDate: new Date(),
+        };
+        message = renderTemplate(receiptTemplate, {
+          customer,
+          receiptSettings,
+          payment: paymentShim,
+          dueDateOverride: `Day ${customer.billReceiveDate} of next month`,
+          invoice: { billAmount: paymentDetails.amount },
+        });
+      } else {
+        message = `✅ *Payment Received - Thank You!*
 
 Dear ${customer.customerName},
 
@@ -175,6 +253,7 @@ For any queries, please contact support.
 
 Best regards,
 Your ISP Team 🌐`;
+      }
 
       return await service.sendMessage(customer.phone, message);
     } catch (error) {

@@ -38,6 +38,13 @@ app.use("/api/invoices", require("./routes/invoiceRoutes"));
 app.use("/api/payments", require("./routes/paymentRoutes"));
 app.use("/api/customer-notes", require("./routes/customerNoteRoutes"));
 
+// Reminder Messages & Receipt Management module -- admin-editable WhatsApp
+// message templates (see services/expiryChecker.js for how the "official"
+// send functions now read from these) and the receipt/company settings
+// already mounted below at /api/settings. Backfill:
+// backend/scripts/migrateReminderTemplates.js
+app.use("/api/reminder-templates", require("./routes/reminderTemplateRoutes"));
+
 // Ported from the desktop billing app so both the mobile app and the
 // desktop app read/write the same invoice/inventory/receipt-branding data.
 app.use("/api/inventory", require("./routes/inventoryRoutes"));
