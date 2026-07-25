@@ -186,7 +186,7 @@ async function destroyClient() {
 // INITIALIZE WHATSAPP CLIENT
 // --------------------------------------------------------------------------------------
 function initializeWhatsApp() {
-  if (initializing) return { getQR, getStatus, sendMessage, sendDocument };
+  if (initializing) return { getQR, getStatus, sendMessage, sendDocument, checkNumber };
   initializing = true;
 
   console.log("🔄 Initializing WhatsApp client (whatsapp-web.js, real browser session)...");
@@ -309,7 +309,7 @@ function initializeWhatsApp() {
 
   initializing = false;
 
-  return { getQR, getStatus, sendMessage, sendDocument };
+  return { getQR, getStatus, sendMessage, sendDocument, checkNumber };
 }
 
 // --------------------------------------------------------------------------------------
@@ -329,6 +329,41 @@ function getStatus() {
   };
 }
 
+// Diagnostic-only: checks whether a phone number is actually registered on
+// WhatsApp right now, without sending anything. Lets us answer "the number
+// definitely has WhatsApp, why won't it send?" directly against the live
+// session instead of guessing — returns the raw phone, what it normalized
+// to, whether WhatsApp confirms registration, and the resolved chat ID.
+async function checkNumber(phone) {
+  if (!client || !isReady) {
+    return { ok: false, error: "WhatsApp is not connected" };
+  }
+  const normalized = normalizePhone(phone);
+  if (!normalized) {
+    return { ok: false, rawPhone: phone, error: "Could not normalize this phone number into a valid format" };
+  }
+  try {
+    const numberId = await client.getNumberId(normalized);
+    if (!numberId) {
+      return {
+        ok: false,
+        rawPhone: phone,
+        normalizedPhone: normalized,
+        error: "WhatsApp reports this number is NOT registered",
+      };
+    }
+    return {
+      ok: true,
+      rawPhone: phone,
+      normalizedPhone: normalized,
+      registered: true,
+      chatId: numberId._serialized,
+    };
+  } catch (err) {
+    return { ok: false, rawPhone: phone, normalizedPhone: normalized, error: err.message };
+  }
+}
+
 // --------------------------------------------------------------------------------------
 // EXPORT SERVICE
 // --------------------------------------------------------------------------------------
@@ -338,3 +373,9 @@ module.exports = async function createWhatsAppService() {
   }
   return serviceInstance;
 };
+
+// Exposed as a static property (not part of the async service instance) so
+// scripts/routes can reuse the exact same normalization logic without
+// having to wait for/spin up a WhatsApp client — e.g. an offline audit of
+// every customer's stored phone number.
+module.exports.normalizePhone = normalizePhone;

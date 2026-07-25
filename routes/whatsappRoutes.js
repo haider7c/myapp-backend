@@ -29,6 +29,24 @@ router.get("/qr", async (req, res) => {
   res.json({ qr });
 });
 
+// DIAGNOSTIC: check whether a specific customer's phone number is actually
+// registered on WhatsApp right now, without sending them anything. Answers
+// "the number definitely has WhatsApp, why won't the reminder send?"
+// directly against the live session instead of guessing.
+router.get("/check-number/:customerId", auth, async (req, res) => {
+  try {
+    const customer = await Customer.findById(req.params.customerId);
+    if (!customer) return res.status(404).json({ ok: false, error: "Customer not found" });
+    if (!customer.phone) return res.status(400).json({ ok: false, error: "Customer has no phone number on file" });
+
+    const service = await whatsappServicePromise;
+    const result = await service.checkNumber(customer.phone);
+    res.json({ ...result, customerName: customer.customerName });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
 // SEND MESSAGE
 router.post("/send", async (req, res) => {
   const service = await whatsappServicePromise;
