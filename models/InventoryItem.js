@@ -6,6 +6,7 @@ const mongoose = require("mongoose");
 // the desktop app so both apps share the same catalog.
 const inventoryItemSchema = new mongoose.Schema(
   {
+    ownerId: { type: mongoose.Schema.Types.ObjectId, ref: "User", index: true },
     name: { type: String, required: true, trim: true },
     unit: { type: String, default: "pcs", trim: true }, // e.g. pcs, meter, box
     purchasePrice: { type: Number, default: 0 }, // cost price (internal, not printed on receipts)

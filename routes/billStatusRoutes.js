@@ -6,10 +6,14 @@ const Customer = require('../models/Customer');
 const auth = require('../middleware/auth');
 const { logActivity } = require('../services/activityLogger');
 
-// GET all bill statuses
-router.get('/', async (req, res) => {
+function ownerScope(req) {
+  return req.user.role === "owner" ? req.user.id : req.user.ownerId;
+}
+
+// GET all bill statuses (scoped to the logged-in owner's tenant)
+router.get('/', auth, async (req, res) => {
   try {
-    const statuses = await BillStatus.find();
+    const statuses = await BillStatus.find({ ownerId: ownerScope(req) });
     res.json(statuses);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -18,13 +22,14 @@ router.get('/', async (req, res) => {
 
 // GET bill statuses for a given month/year (populated) — ported from the
 // desktop app's monthly billing view.
-router.get('/monthly', async (req, res) => {
+router.get('/monthly', auth, async (req, res) => {
   const { month, year } = req.query;
   try {
     if (!month || !year) {
       return res.status(400).json({ message: 'Month and year are required' });
     }
     const statuses = await BillStatus.find({
+      ownerId: ownerScope(req),
       month: parseInt(month),
       year: parseInt(year),
     }).populate('customerId');
@@ -35,11 +40,12 @@ router.get('/monthly', async (req, res) => {
 });
 
 // GET a bill status by its recorded transaction ID — ported from desktop.
-router.get('/transaction/:transactionId', async (req, res) => {
+router.get('/transaction/:transactionId', auth, async (req, res) => {
   try {
-    const billStatus = await BillStatus.findOne({ transactionId: req.params.transactionId }).populate(
-      'customerId'
-    );
+    const billStatus = await BillStatus.findOne({
+      transactionId: req.params.transactionId,
+      ownerId: ownerScope(req),
+    }).populate('customerId');
     if (!billStatus) {
       return res.status(404).json({ success: false, error: 'Transaction not found' });
     }
@@ -50,10 +56,14 @@ router.get('/transaction/:transactionId', async (req, res) => {
 });
 
 // GET a customer's payment history — ported from desktop.
-router.get('/customer/:customerId', async (req, res) => {
+router.get('/customer/:customerId', auth, async (req, res) => {
   try {
     const { limit = 10 } = req.query;
-    const payments = await BillStatus.find({ customerId: req.params.customerId, billStatus: true })
+    const payments = await BillStatus.find({
+      customerId: req.params.customerId,
+      ownerId: ownerScope(req),
+      billStatus: true,
+    })
       .sort({ paymentDate: -1, billReceivedAt: -1 })
       .limit(parseInt(limit))
       .populate('customerId');
@@ -68,16 +78,17 @@ router.get('/customer/:customerId', async (req, res) => {
 // that already depends on that behavior breaks) — this is what the
 // desktop app's "save bill status" flow uses instead, to avoid creating
 // duplicate rows for the same customer/month.
-router.put('/upsert', async (req, res) => {
+router.put('/upsert', auth, async (req, res) => {
   const { customerId, month, year, billStatus, paymentMethod, paymentNote } = req.body;
   try {
-    let doc = await BillStatus.findOne({ customerId, month, year });
+    const ownerId = ownerScope(req);
+    let doc = await BillStatus.findOne({ customerId, month, year, ownerId });
     if (doc) {
       doc.billStatus = billStatus;
       doc.paymentMethod = paymentMethod;
       doc.paymentNote = paymentNote;
     } else {
-      doc = new BillStatus({ customerId, month, year, billStatus, paymentMethod, paymentNote });
+      doc = new BillStatus({ customerId, month, year, billStatus, paymentMethod, paymentNote, ownerId });
     }
     const saved = await doc.save();
     res.status(201).json(saved);
@@ -87,9 +98,9 @@ router.put('/upsert', async (req, res) => {
 });
 
 // POST new bill status
-router.post('/', async (req, res) => {
+router.post('/', auth, async (req, res) => {
   try {
-    const payload = { ...req.body };
+    const payload = { ...req.body, ownerId: ownerScope(req) };
 
     // ⭐ Automatically save billReceivedAt only when billStatus=true
     if (payload.billStatus === true) {
@@ -107,11 +118,12 @@ router.post('/', async (req, res) => {
 
 
 // PUT update bill status
-router.put('/:id', async (req, res) => {
+router.put('/:id', auth, async (req, res) => {
   try {
-    const billStatus = await BillStatus.findByIdAndUpdate(
-      req.params.id,
-      req.body,
+    const { ownerId, ...updateData } = req.body; // never let the client move a record to another tenant
+    const billStatus = await BillStatus.findOneAndUpdate(
+      { _id: req.params.id, ownerId: ownerScope(req) },
+      updateData,
       { new: true }
     );
     if (!billStatus) {
@@ -124,10 +136,10 @@ router.put('/:id', async (req, res) => {
 });
 
 // PATCH: mark a bill as unpaid (set billStatus false + clear billReceivedAt)
-router.patch("/mark-unpaid/:id", async (req, res) => {
+router.patch("/mark-unpaid/:id", auth, async (req, res) => {
   try {
-    const billStatus = await BillStatus.findByIdAndUpdate(
-      req.params.id,
+    const billStatus = await BillStatus.findOneAndUpdate(
+      { _id: req.params.id, ownerId: ownerScope(req) },
       {
         billStatus: false,
         billReceivedAt: null,
@@ -163,6 +175,15 @@ router.patch("/mark-paid", auth, async (req, res) => {
       paymentDate,
     } = req.body;
 
+    const ownerId = ownerScope(req);
+
+    // Verify the customerId in the body actually belongs to this
+    // requester's tenant before touching/creating anything for it.
+    const customer = await Customer.findOne({ _id: customerId, ownerId }).catch(() => null);
+    if (!customer) {
+      return res.status(404).json({ success: false, error: "Customer not found" });
+    }
+
     const extra = {};
     if (transactionId !== undefined) {
       extra.transactionId = transactionId;
@@ -174,8 +195,7 @@ router.patch("/mark-paid", auth, async (req, res) => {
     if (paymentDate !== undefined) extra.paymentDate = new Date(paymentDate);
 
     // check if exists
-    let existing = await BillStatus.findOne({ customerId, month, year });
-    const customer = await Customer.findById(customerId).catch(() => null);
+    let existing = await BillStatus.findOne({ customerId, month, year, ownerId });
     const amountForLog = paymentAmount ?? customer?.amount ?? null;
 
     if (existing) {
@@ -206,6 +226,7 @@ router.patch("/mark-paid", auth, async (req, res) => {
     // else create new
     const newRecord = await BillStatus.create({
       customerId,
+      ownerId,
       month,
       year,
       billStatus: true,

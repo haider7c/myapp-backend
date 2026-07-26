@@ -1,15 +1,17 @@
 const express = require("express");
 const InventoryItem = require("../models/InventoryItem");
+const auth = require("../middleware/auth");
 
 const router = express.Router();
 
-// Unauthenticated, un-scoped by ownerId — matches this backend's existing
-// convention for shared reference data (see packageRoutes.js).
+function ownerScope(req) {
+  return req.user.role === "owner" ? req.user.id : req.user.ownerId;
+}
 
-// GET /api/inventory — list all items, newest first
-router.get("/", async (req, res) => {
+// GET /api/inventory — list this tenant's items, newest first
+router.get("/", auth, async (req, res) => {
   try {
-    const items = await InventoryItem.find().sort({ createdAt: -1 });
+    const items = await InventoryItem.find({ ownerId: ownerScope(req) }).sort({ createdAt: -1 });
     res.status(200).json(items);
   } catch (err) {
     res.status(500).json({ message: "Failed to fetch inventory items", error: err.message });
@@ -17,9 +19,9 @@ router.get("/", async (req, res) => {
 });
 
 // POST /api/inventory — create a new item
-router.post("/", async (req, res) => {
+router.post("/", auth, async (req, res) => {
   try {
-    const item = new InventoryItem(req.body);
+    const item = new InventoryItem({ ...req.body, ownerId: ownerScope(req) });
     await item.save();
     res.status(201).json(item);
   } catch (err) {
@@ -28,12 +30,14 @@ router.post("/", async (req, res) => {
 });
 
 // PUT /api/inventory/:id — update an item
-router.put("/:id", async (req, res) => {
+router.put("/:id", auth, async (req, res) => {
   try {
-    const item = await InventoryItem.findByIdAndUpdate(req.params.id, req.body, {
-      new: true,
-      runValidators: true,
-    });
+    const { ownerId, ...updateData } = req.body;
+    const item = await InventoryItem.findOneAndUpdate(
+      { _id: req.params.id, ownerId: ownerScope(req) },
+      updateData,
+      { new: true, runValidators: true }
+    );
     if (!item) return res.status(404).json({ message: "Item not found" });
     res.status(200).json(item);
   } catch (err) {
@@ -42,9 +46,12 @@ router.put("/:id", async (req, res) => {
 });
 
 // DELETE /api/inventory/:id — remove an item
-router.delete("/:id", async (req, res) => {
+router.delete("/:id", auth, async (req, res) => {
   try {
-    const item = await InventoryItem.findByIdAndDelete(req.params.id);
+    const item = await InventoryItem.findOneAndDelete({
+      _id: req.params.id,
+      ownerId: ownerScope(req),
+    });
     if (!item) return res.status(404).json({ message: "Item not found" });
     res.status(200).json({ message: "Item deleted" });
   } catch (err) {

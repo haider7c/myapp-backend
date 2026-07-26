@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 
 const additionalChargeSchema = new mongoose.Schema(
   {
+    ownerId: { type: mongoose.Schema.Types.ObjectId, ref: "User", index: true },
     customerId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Customer",

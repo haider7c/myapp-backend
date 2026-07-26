@@ -261,14 +261,21 @@ Your ISP Team 🌐`;
     }
   }
 
-  async getExpiringPackages(days = 3) {
+  // ownerId is optional: when provided (e.g. a mobile screen asking "what's
+  // expiring for MY customers"), results are scoped to that tenant only.
+  // Left undefined, this returns every tenant's expiring packages -- only
+  // safe for internal/cron use, never for a route that returns data
+  // straight to an HTTP caller.
+  async getExpiringPackages(days = 3, ownerId = undefined) {
     const today = new Date();
     const expiringPackages = [];
     for (let i = 1; i <= days; i++) {
       const futureDate = new Date(today);
       futureDate.setDate(today.getDate() + i);
       const futureDay = futureDate.getDate();
-      const customers = await Customer.find({ billReceiveDate: futureDay });
+      const query = { billReceiveDate: futureDay };
+      if (ownerId) query.ownerId = ownerId;
+      const customers = await Customer.find(query);
       customers.forEach((customer) => {
         expiringPackages.push({
           ...customer.toObject(),
@@ -280,8 +287,10 @@ Your ISP Team 🌐`;
     return expiringPackages;
   }
 
-  async getDueTodayPackages() {
-    return Customer.find({ billReceiveDate: new Date().getDate() });
+  async getDueTodayPackages(ownerId = undefined) {
+    const query = { billReceiveDate: new Date().getDate() };
+    if (ownerId) query.ownerId = ownerId;
+    return Customer.find(query);
   }
 
   // Multi-tenant note: this used to check ONE global "is WhatsApp

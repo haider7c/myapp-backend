@@ -9,9 +9,18 @@ const router = express.Router();
 /**
  * REGISTER (Owner or Employee)
  */
+// Public self-registration only ever creates a brand-new independent
+// "owner" tenant. Employee accounts must NOT be creatable through this
+// public route: it used to accept a client-supplied `ownerId` straight from
+// the request body, which let anyone register themselves as an "employee"
+// under any other tenant's ownerId (just by guessing/knowing the id) and
+// then use employee-scoped routes to read that tenant's data. Employees are
+// created the safe way instead, by an authenticated owner, via
+// POST /api/employees (see routes/employeeRoutes.js), which stamps
+// ownerId from the logged-in owner's own token -- never from the request.
 router.post("/register", async (req, res) => {
   try {
-    const { name, email, password, role, ownerId } = req.body;
+    const { name, email, password } = req.body;
 
     const exists = await User.findOne({ email });
     if (exists)
@@ -23,8 +32,8 @@ router.post("/register", async (req, res) => {
       name,
       email,
       password: hashedPassword,
-      role,
-      ownerId: role === "employee" ? ownerId : null,
+      role: "owner",
+      ownerId: null,
     });
 
     res.json({ success: true, user });

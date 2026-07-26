@@ -31,6 +31,13 @@ const { logActivity } = require("../services/activityLogger");
 const whatsappServicePromise = createWhatsAppService();
 const expiryChecker = new ExpiryChecker(whatsappServicePromise);
 
+// Tenant id the logged-in requester is allowed to touch (owner's own id, or
+// their employer's id if they're an employee). Used to verify a customerId
+// param actually belongs to the requester's tenant before acting on it.
+function requesterOwnerId(req) {
+  return req.user.role === "owner" ? req.user.id : req.user.ownerId;
+}
+
 let cachedDefaultOwnerId = null;
 async function getDefaultOwnerId() {
   if (cachedDefaultOwnerId) return cachedDefaultOwnerId;
@@ -93,7 +100,10 @@ router.post("/disconnect", auth, async (req, res) => {
 // registered on WhatsApp right now, without sending them anything.
 router.get("/check-number/:customerId", auth, async (req, res) => {
   try {
-    const customer = await Customer.findById(req.params.customerId);
+    const customer = await Customer.findOne({
+      _id: req.params.customerId,
+      ownerId: requesterOwnerId(req),
+    });
     if (!customer) return res.status(404).json({ ok: false, error: "Customer not found" });
     if (!customer.phone) return res.status(400).json({ ok: false, error: "Customer has no phone number on file" });
 
@@ -170,7 +180,10 @@ router.post("/send-test", auth, async (req, res) => {
 
 router.post("/send-expiry-reminder/:customerId", auth, async (req, res) => {
   try {
-    const customer = await Customer.findById(req.params.customerId);
+    const customer = await Customer.findOne({
+      _id: req.params.customerId,
+      ownerId: requesterOwnerId(req),
+    });
     if (!customer) return res.status(404).json({ success: false, error: "Customer not found" });
 
     const service = await whatsappServicePromise;
@@ -195,7 +208,10 @@ router.post("/send-expiry-reminder/:customerId", auth, async (req, res) => {
 
 router.post("/send-bill-reminder/:customerId", auth, async (req, res) => {
   try {
-    const customer = await Customer.findById(req.params.customerId);
+    const customer = await Customer.findOne({
+      _id: req.params.customerId,
+      ownerId: requesterOwnerId(req),
+    });
     if (!customer) return res.status(404).json({ success: false, error: "Customer not found" });
 
     const service = await whatsappServicePromise;
@@ -224,7 +240,10 @@ router.post("/send-bill-reminder/:customerId", auth, async (req, res) => {
 
 router.post("/send-payment-receipt/:customerId", auth, async (req, res) => {
   try {
-    const customer = await Customer.findById(req.params.customerId);
+    const customer = await Customer.findOne({
+      _id: req.params.customerId,
+      ownerId: requesterOwnerId(req),
+    });
     if (!customer) return res.status(404).json({ success: false, error: "Customer not found" });
 
     const service = await whatsappServicePromise;
@@ -249,16 +268,19 @@ router.post("/send-payment-receipt/:customerId", auth, async (req, res) => {
 });
 
 // Packages expiring in the next N days, filtered to unpaid customers only
-// (same filtering the desktop app applies).
-router.get("/expiring-packages", async (req, res) => {
+// (same filtering the desktop app applies). Scoped to the logged-in
+// owner's tenant -- this used to return every tenant's expiring customers.
+router.get("/expiring-packages", auth, async (req, res) => {
   try {
     const { days = 3 } = req.query;
-    const packages = await expiryChecker.getExpiringPackages(parseInt(days));
+    const ownerId = requesterOwnerId(req);
+    const packages = await expiryChecker.getExpiringPackages(parseInt(days), ownerId);
 
     const unpaidPackages = [];
     for (const pkg of packages) {
       const bill = await BillStatus.findOne({
         customerId: pkg._id,
+        ownerId,
         month: new Date().getMonth() + 1,
         year: new Date().getFullYear(),
       });
@@ -272,9 +294,9 @@ router.get("/expiring-packages", async (req, res) => {
   }
 });
 
-router.get("/due-today", async (req, res) => {
+router.get("/due-today", auth, async (req, res) => {
   try {
-    const packages = await expiryChecker.getDueTodayPackages();
+    const packages = await expiryChecker.getDueTodayPackages(requesterOwnerId(req));
     res.json(packages);
   } catch (error) {
     res.status(500).json({ error: error.message });

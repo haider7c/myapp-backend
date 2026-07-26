@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 
 const billSchema = new mongoose.Schema({
+  ownerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
   customerId: mongoose.Schema.Types.ObjectId,
   billMonth: String,
   billReceiveDate: Date,

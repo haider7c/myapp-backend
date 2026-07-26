@@ -1,8 +1,11 @@
 // backend/services/reminderService.js
 const Customer = require("../models/Customer");
 
-async function sendReminders(service) {
-  const customers = await Customer.find();
+// ownerId is required now -- this used to fetch every customer in the
+// entire system regardless of which tenant triggered it, sending a WhatsApp
+// blast to every business's customers from a single unauthenticated route.
+async function sendReminders(service, ownerId) {
+  const customers = await Customer.find({ ownerId });
 
   for (const customer of customers) {
     if (!customer.phone) continue;

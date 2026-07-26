@@ -28,9 +28,14 @@ const { logActivity } = require("./activityLogger");
 // ---------------------------------------------------------------------------
 // Sequence numbers (invoice / receipt) -- atomic, session-aware.
 // ---------------------------------------------------------------------------
-async function nextSequence(name, prefix, padLength = 6, session) {
+// ownerId scopes the sequence to one tenant so invoice/receipt numbers from
+// different businesses never interleave or collide. Callers that don't pass
+// one fall back to a single legacy shared sequence (ownerId: null) -- kept
+// only so nothing throws if an old caller is missed; every call site in
+// this file passes the customer's ownerId.
+async function nextSequence(name, prefix, padLength = 6, session, ownerId = null) {
   const counter = await Counter.findOneAndUpdate(
-    { name },
+    { name, ownerId },
     { $inc: { value: 1 } },
     { new: true, upsert: true, session }
   );
@@ -118,7 +123,7 @@ async function generateInvoice(customerId, month, year, { generatedBy, session: 
     const prior = await getLatestInvoice(customerId, { beforeYear: year, beforeMonth: month, session });
     const openingBalance = prior ? Math.max(prior.closingBalance, 0) : 0;
 
-    const invoiceNumber = await nextSequence("invoiceNumber", "INV", 6, session);
+    const invoiceNumber = await nextSequence("invoiceNumber", "INV", 6, session, customer.ownerId);
 
     const draft = {
       customerId,
@@ -248,7 +253,7 @@ async function applyPayment({
         await Customer.findByIdAndUpdate(customerId, { $inc: { advanceBalance: advanceAmount } }, { session });
       }
 
-      const receiptNumber = await nextSequence("receiptNumber", "RCPT", 6, session);
+      const receiptNumber = await nextSequence("receiptNumber", "RCPT", 6, session, customer.ownerId);
       const operatorName = reqUser
         ? (await User.findById(reqUser.id).select("name").session(session))?.name || ""
         : "";

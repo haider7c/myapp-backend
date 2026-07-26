@@ -5,9 +5,14 @@ const fs = require("fs");
 const path = require("path");
 const AdditionalCharge = require("../models/AdditionalCharge");
 const Customer = require("../models/Customer");
+const auth = require("../middleware/auth");
 
 const createWhatsAppService = require("../services/whatsappService");
 const whatsappServicePromise = createWhatsAppService();
+
+function ownerScope(req) {
+  return req.user.role === "owner" ? req.user.id : req.user.ownerId;
+}
 
 // TEMP FOLDER
 const tempDir = path.join(__dirname, "../temp");
@@ -19,14 +24,21 @@ const A7_HEIGHT = 3.7 * 72;
 // -------------------------------
 // SAVE OR UPDATE (MAIN LOGIC)
 // -------------------------------
-router.post("/save-or-update", async (req, res) => {
+router.post("/save-or-update", auth, async (req, res) => {
   try {
     const { customerObjectId, charges, total, includeInNextBill } = req.body;
+    const ownerId = ownerScope(req);
 
     if (!customerObjectId)
       return res.status(400).json({ success: false, error: "customerObjectId required" });
 
-    let record = await AdditionalCharge.findOne({ customerId: customerObjectId });
+    // Verify the customer this charge is for actually belongs to the
+    // requester's tenant before touching/creating anything for it.
+    const customerDoc = await Customer.findOne({ _id: customerObjectId, ownerId }).select("_id");
+    if (!customerDoc)
+      return res.status(404).json({ success: false, error: "Customer not found" });
+
+    let record = await AdditionalCharge.findOne({ customerId: customerObjectId, ownerId });
 
     if (record) {
       record.charges = charges;
@@ -39,6 +51,7 @@ router.post("/save-or-update", async (req, res) => {
 
     const created = await AdditionalCharge.create({
       customerId: customerObjectId,
+      ownerId,
       charges,
       totalAmount: total,
       includeInNextBill
@@ -51,11 +64,11 @@ router.post("/save-or-update", async (req, res) => {
 });
 
 // -------------------------------
-// GET ALL
+// GET ALL (scoped to the logged-in owner's tenant)
 // -------------------------------
-router.get("/all", async (req, res) => {
+router.get("/all", auth, async (req, res) => {
   try {
-    const records = await AdditionalCharge.find().sort({ createdAt: -1 });
+    const records = await AdditionalCharge.find({ ownerId: ownerScope(req) }).sort({ createdAt: -1 });
     res.json({ success: true, data: records });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -65,9 +78,12 @@ router.get("/all", async (req, res) => {
 // -------------------------------
 // GET SPECIFIC CUSTOMER
 // -------------------------------
-router.get("/customer/:customerId", async (req, res) => {
+router.get("/customer/:customerId", auth, async (req, res) => {
   try {
-    const record = await AdditionalCharge.findOne({ customerId: req.params.customerId });
+    const record = await AdditionalCharge.findOne({
+      customerId: req.params.customerId,
+      ownerId: ownerScope(req),
+    });
     res.json({ success: true, data: record || null });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -77,12 +93,12 @@ router.get("/customer/:customerId", async (req, res) => {
 // -------------------------------
 // DELETE SINGLE CHARGE
 // -------------------------------
-router.delete("/customer/:customerId/charge/:chargeId", async (req, res) => {
+router.delete("/customer/:customerId/charge/:chargeId", auth, async (req, res) => {
   try {
     const { customerId, chargeId } = req.params;
 
     const updated = await AdditionalCharge.findOneAndUpdate(
-      { customerId },
+      { customerId, ownerId: ownerScope(req) },
       { $pull: { charges: { _id: chargeId } } },
       { new: true }
     );
@@ -102,10 +118,11 @@ router.delete("/customer/:customerId/charge/:chargeId", async (req, res) => {
 // -------------------------------
 // DELETE FULL RECORD
 // -------------------------------
-router.delete("/customer/:customerId", async (req, res) => {
+router.delete("/customer/:customerId", auth, async (req, res) => {
   try {
     const deleted = await AdditionalCharge.findOneAndDelete({
       customerId: req.params.customerId,
+      ownerId: ownerScope(req),
     });
 
     if (!deleted)
@@ -120,9 +137,10 @@ router.delete("/customer/:customerId", async (req, res) => {
 // -------------------------------
 // GENERATE PDF — SEND WHATSAPP — UPDATE RECORD (NO DUPLICATE)
 // -------------------------------
-router.post("/generate-pdf", async (req, res) => {
+router.post("/generate-pdf", auth, async (req, res) => {
   try {
     const service = await whatsappServicePromise;
+    const ownerId = ownerScope(req);
 
     const { customerName, customerId, customerObjectId, phone, charges, total } = req.body;
 
@@ -132,8 +150,14 @@ router.post("/generate-pdf", async (req, res) => {
     if (!phone)
       return res.status(400).json({ success: false, error: "phone required" });
 
+    // Verify the customer belongs to the requester's tenant before doing
+    // anything else (also gives us the confirmed ownerId to send through).
+    const customerDoc = await Customer.findOne({ _id: customerObjectId, ownerId }).select("ownerId");
+    if (!customerDoc)
+      return res.status(404).json({ success: false, error: "Customer not found" });
+
     // Update or Create
-    let record = await AdditionalCharge.findOne({ customerId: customerObjectId });
+    let record = await AdditionalCharge.findOne({ customerId: customerObjectId, ownerId });
 
     if (record) {
       record.charges = charges;
@@ -143,6 +167,7 @@ router.post("/generate-pdf", async (req, res) => {
     } else {
       record = await AdditionalCharge.create({
         customerId: customerObjectId,
+        ownerId,
         charges,
         totalAmount: total,
         includeInNextBill: false,
@@ -187,9 +212,8 @@ router.post("/generate-pdf", async (req, res) => {
 
     stream.on("finish", async () => {
       // Multi-tenant: send through THIS customer's own owner's WhatsApp
-      // session, not a single shared one.
-      const customerDoc = await Customer.findById(customerObjectId).select("ownerId");
-      await service.sendDocument(customerDoc?.ownerId, phone, filePath, fileName);
+      // session, not a single shared one. ownerId already verified above.
+      await service.sendDocument(ownerId, phone, filePath, fileName);
       return res.json({ success: true, message: "PDF sent", data: record });
     });
 

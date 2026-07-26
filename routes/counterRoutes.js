@@ -1,16 +1,23 @@
 const express = require("express");
 const router = express.Router();
 const Counter = require("../models/Counter");
+const auth = require("../middleware/auth");
 
-// GET current customer serial number
-router.get("/customer-id", async (req, res) => {
-  try {
-    let counter = await Counter.findOne({ name: "invoice" });
-
-   if (!counter) {
-  return res.status(400).json({ message: "Counter 'invoice' not found in database" });
+function ownerScope(req) {
+  return req.user.role === "owner" ? req.user.id : req.user.ownerId;
 }
 
+// GET current customer serial number (own tenant's sequence only)
+router.get("/customer-id", auth, async (req, res) => {
+  try {
+    const ownerId = ownerScope(req);
+    let counter = await Counter.findOne({ name: "invoice", ownerId });
+
+    if (!counter) {
+      // First time this tenant has asked -- start their own sequence at 0
+      // rather than reusing/reading another tenant's counter.
+      counter = await Counter.create({ name: "invoice", ownerId, value: 0 });
+    }
 
     res.json(counter);
   } catch (error) {
@@ -18,18 +25,15 @@ router.get("/customer-id", async (req, res) => {
   }
 });
 
-// INCREASE customer serial
-router.put("/increase-customer-id", async (req, res) => {
+// INCREASE customer serial (own tenant's sequence only)
+router.put("/increase-customer-id", auth, async (req, res) => {
   try {
-    let counter = await Counter.findOneAndUpdate(
-      { name: "invoice" },
+    const ownerId = ownerScope(req);
+    const counter = await Counter.findOneAndUpdate(
+      { name: "invoice", ownerId },
       { $inc: { value: 1 } },
-      { new: true }
+      { new: true, upsert: true }
     );
-
-    if (!counter) {
-      counter = await Counter.create({ name: "invoice", value: 1 });
-    }
 
     res.json(counter);
   } catch (error) {

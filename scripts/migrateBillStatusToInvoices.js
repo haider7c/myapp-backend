@@ -74,7 +74,7 @@ async function migrateCustomer(customer) {
     const draft = {
       customerId: customer._id,
       ownerId: customer.ownerId,
-      invoiceNumber: await billingEngine.nextSequence("invoiceNumber", "INV", 6),
+      invoiceNumber: await billingEngine.nextSequence("invoiceNumber", "INV", 6, undefined, customer.ownerId),
       month: row.month,
       year: row.year,
       openingBalance,

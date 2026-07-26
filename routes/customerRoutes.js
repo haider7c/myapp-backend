@@ -19,13 +19,20 @@ async function getOrCreateDefault(Model, ownerId, name) {
   return doc;
 }
 
+// Every business owner is its own tenant. This resolves the tenant id a
+// request is allowed to touch: the owner's own id, or the ownerId their
+// employee account belongs to. Every query below must be scoped by this.
+function ownerScope(req) {
+  return req.user.role === "owner" ? req.user.id : req.user.ownerId;
+}
+
 // =============================
 // GET ALL CUSTOMERS (WITH ROLE-BASED FILTERING)
 // =============================
 router.get("/", auth, async (req, res) => {
   try {
     const { date } = req.query;
-    let query = {};
+    let query = { ownerId: ownerScope(req) };
 
     // Date filter if provided
     if (date) {
@@ -44,7 +51,7 @@ router.get("/", auth, async (req, res) => {
       }
       query.areaId = { $in: req.user.assignedAreas };
     }
-    // Owner can see all (no additional filter)
+    // Owner sees all customers within their own tenant (scoped above)
 
     console.log("User role:", req.user.role);
     console.log("Assigned areas:", req.user.assignedAreas);
@@ -68,7 +75,7 @@ router.get("/", auth, async (req, res) => {
 // =============================
 router.get("/active", auth, async (req, res) => {
   try {
-    let query = { status: "active" };
+    let query = { status: "active", ownerId: ownerScope(req) };
 
     // Role-based filtering
     if (req.user.role === "employee") {
@@ -90,7 +97,7 @@ router.get("/active", auth, async (req, res) => {
 // =============================
 router.get("/discontinued", auth, async (req, res) => {
   try {
-    let query = { status: "discontinued" };
+    let query = { status: "discontinued", ownerId: ownerScope(req) };
 
     // Role-based filtering
     if (req.user.role === "employee") {
@@ -112,7 +119,10 @@ router.get("/discontinued", auth, async (req, res) => {
 // =============================
 router.get("/:id", auth, async (req, res) => {
   try {
-    const customer = await Customer.findById(req.params.id)
+    const customer = await Customer.findOne({
+      _id: req.params.id,
+      ownerId: ownerScope(req),
+    })
       .populate("areaId", "name")
       .populate("serviceId", "name")
       .populate("assignedEmployeeId", "name");
@@ -153,8 +163,8 @@ router.put("/:id/discontinue", auth, async (req, res) => {
         .json({ message: "Only owner can discontinue customers" });
     }
 
-    const customer = await Customer.findByIdAndUpdate(
-      req.params.id,
+    const customer = await Customer.findOneAndUpdate(
+      { _id: req.params.id, ownerId: ownerScope(req) },
       {
         status: "discontinued",
         discontinuedAt: new Date(),
@@ -164,6 +174,10 @@ router.put("/:id/discontinue", auth, async (req, res) => {
       .populate("areaId", "name")
       .populate("serviceId", "name")
       .populate("assignedEmployeeId", "name");
+
+    if (!customer) {
+      return res.status(404).json({ message: "Customer not found" });
+    }
 
     if (customer) {
       logActivity({
@@ -195,8 +209,8 @@ router.put("/:id/reactivate", auth, async (req, res) => {
         .json({ message: "Only owner can reactivate customers" });
     }
 
-    const customer = await Customer.findByIdAndUpdate(
-      req.params.id,
+    const customer = await Customer.findOneAndUpdate(
+      { _id: req.params.id, ownerId: ownerScope(req) },
       {
         status: "active",
         discontinuedAt: null,
@@ -206,6 +220,10 @@ router.put("/:id/reactivate", auth, async (req, res) => {
       .populate("areaId", "name")
       .populate("serviceId", "name")
       .populate("assignedEmployeeId", "name");
+
+    if (!customer) {
+      return res.status(404).json({ message: "Customer not found" });
+    }
 
     res.json({
       message: "Customer reactivated successfully",
@@ -315,6 +333,7 @@ router.get("/search/:identifier", auth, async (req, res) => {
 
     // Build search query - search in multiple fields
     const searchQuery = {
+      ownerId: ownerScope(req),
       $or: [
         { customerId: { $regex: identifier, $options: "i" } }, // case-insensitive search in customerId
         { customerName: { $regex: identifier, $options: "i" } }, // search in customer name
@@ -385,7 +404,10 @@ router.get("/by-customerid/:customerId", auth, async (req, res) => {
   try {
     const customerId = req.params.customerId;
 
-    const customer = await Customer.findOne({ customerId: customerId })
+    const customer = await Customer.findOne({
+      customerId: customerId,
+      ownerId: ownerScope(req),
+    })
       .populate("areaId", "name")
       .populate("serviceId", "name")
       .populate("assignedEmployeeId", "name");
@@ -436,8 +458,8 @@ router.put("/:id", auth, async (req, res) => {
         .json({ message: "Only owner can update customer details" });
     }
 
-    const updatedCustomer = await Customer.findByIdAndUpdate(
-      req.params.id,
+    const updatedCustomer = await Customer.findOneAndUpdate(
+      { _id: req.params.id, ownerId: ownerScope(req) },
       req.body,
       { new: true },
     )
@@ -477,7 +499,10 @@ router.delete("/:id", auth, async (req, res) => {
         .json({ message: "Only owner can delete customers" });
     }
 
-    const deletedCustomer = await Customer.findByIdAndDelete(req.params.id);
+    const deletedCustomer = await Customer.findOneAndDelete({
+      _id: req.params.id,
+      ownerId: ownerScope(req),
+    });
 
     if (!deletedCustomer) {
       return res.status(404).json({ message: "Customer not found" });
@@ -497,7 +522,10 @@ router.delete("/:id", auth, async (req, res) => {
 // =============================
 router.put("/:id/mark-paid", auth, async (req, res) => {
   try {
-    const customer = await Customer.findById(req.params.id);
+    const customer = await Customer.findOne({
+      _id: req.params.id,
+      ownerId: ownerScope(req),
+    });
 
     if (!customer) {
       return res.status(404).json({ message: "Customer not found" });
@@ -518,8 +546,8 @@ router.put("/:id/mark-paid", auth, async (req, res) => {
     }
 
     // Update payment status
-    const updatedCustomer = await Customer.findByIdAndUpdate(
-      req.params.id,
+    const updatedCustomer = await Customer.findOneAndUpdate(
+      { _id: req.params.id, ownerId: ownerScope(req) },
       {
         lastPaymentDate: new Date(),
         lastPaymentAmount: req.body.amount || customer.amount,
@@ -559,6 +587,7 @@ router.get("/my", auth, async (req, res) => {
     }
 
     const customers = await Customer.find({
+      ownerId: ownerScope(req),
       areaId: { $in: req.user.assignedAreas },
     })
       .populate("areaId", "name")

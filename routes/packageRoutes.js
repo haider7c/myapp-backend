@@ -1,11 +1,16 @@
 const express = require("express");
 const router = express.Router();
 const Package = require("../models/Package");
+const auth = require("../middleware/auth");
 
-// ➤ FETCH ALL PACKAGES
-router.get("/", async (req, res) => {
+function ownerScope(req) {
+  return req.user.role === "owner" ? req.user.id : req.user.ownerId;
+}
+
+// ➤ FETCH ALL PACKAGES (scoped to the logged-in owner's tenant)
+router.get("/", auth, async (req, res) => {
   try {
-    const packages = await Package.find();
+    const packages = await Package.find({ ownerId: ownerScope(req) });
     res.json(packages);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -13,9 +18,9 @@ router.get("/", async (req, res) => {
 });
 
 // ➤ ADD NEW PACKAGE
-router.post("/", async (req, res) => {
+router.post("/", auth, async (req, res) => {
   try {
-    const newPackage = new Package(req.body);
+    const newPackage = new Package({ ...req.body, ownerId: ownerScope(req) });
     const saved = await newPackage.save();
     res.json(saved);
   } catch (err) {
@@ -24,11 +29,12 @@ router.post("/", async (req, res) => {
 });
 
 // ➤ UPDATE EXISTING PACKAGE
-router.put("/:id", async (req, res) => {
+router.put("/:id", auth, async (req, res) => {
   try {
-    const updated = await Package.findByIdAndUpdate(
-      req.params.id,
-      req.body,
+    const { ownerId, ...updateData } = req.body; // never let the client move a package to another tenant
+    const updated = await Package.findOneAndUpdate(
+      { _id: req.params.id, ownerId: ownerScope(req) },
+      updateData,
       { new: true }
     );
 
@@ -41,9 +47,12 @@ router.put("/:id", async (req, res) => {
 });
 
 // ➤ DELETE PACKAGE (optional)
-router.delete("/:id", async (req, res) => {
+router.delete("/:id", auth, async (req, res) => {
   try {
-    const deleted = await Package.findByIdAndDelete(req.params.id);
+    const deleted = await Package.findOneAndDelete({
+      _id: req.params.id,
+      ownerId: ownerScope(req),
+    });
 
     if (!deleted) return res.status(404).json({ message: "Package not found" });
 
