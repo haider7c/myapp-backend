@@ -1,19 +1,19 @@
 // backend/services/whatsappService.js
 //
-// Ported from the desktop billing app's proven whatsapp-web.js
-// implementation (src/services/whatsappService.js in ISP-Customer-Billing),
-// which drives a real headless Chrome session against web.whatsapp.com --
-// exactly like scanning a QR in an actual browser. This sidesteps every
-// protocol-level version-matching/pairing-code issue that the previous
-// Baileys-based implementation kept hitting (stale bundled WA-web
-// versions, QR rotation timing, pairing-code socket-state races, etc.),
-// since a real browser always negotiates its own compatible version with
-// WhatsApp's servers the same way the actual WhatsApp Web site does.
+// Multi-tenant rewrite: each business owner links their OWN WhatsApp
+// number/QR code, sent through their OWN whatsapp-web.js Client instance,
+// completely independent of every other owner's session. Previously this
+// was a single module-level Client shared by the entire server -- one
+// phone number sending messages for every tenant regardless of which
+// business the customer belonged to. Now every exported function takes an
+// `ownerId` as its first argument and looks up (or lazily creates) that
+// owner's own session.
 //
-// Kept the exact same exported interface (getQR, getStatus, sendMessage,
-// sendDocument) as the old service so routes/whatsappRoutes.js and the
-// mobile app's polling of /api/whatsapp/status and /api/whatsapp/qr don't
-// need any changes.
+// Sessions are created lazily, one Chromium instance per owner that has
+// actually tried to connect (via getQR), NOT eagerly for every owner in the
+// system at server startup -- each headless Chrome instance is a real
+// CPU/RAM cost, so an owner who never opens their WhatsApp Manager screen
+// never gets one spun up for them.
 const { Client, LocalAuth, MessageMedia } = require("whatsapp-web.js");
 const QRCode = require("qrcode");
 const path = require("path");
@@ -21,44 +21,37 @@ const fs = require("fs");
 
 const AUTH_DIR = path.resolve(__dirname, "../.wwebjs_auth");
 
-let client = null;
-let isReady = false;
-let qrDataUrl = null;
-let qrGeneratedAt = null;
-let qrCount = 0;
-let initializing = false;
-let serviceInstance = null;
+// Map<string ownerId, SessionState>
+const sessions = new Map();
 
-const messageQueue = [];
+function newSessionState() {
+  return {
+    client: null,
+    isReady: false,
+    qrDataUrl: null,
+    qrGeneratedAt: null,
+    qrCount: 0,
+    initializing: false,
+    messageQueue: [],
+  };
+}
 
-// NORMALIZE PHONE (same rules as before, output format changes to match
-// whatsapp-web.js's @c.us JID suffix instead of Baileys' @s.whatsapp.net)
-//
-// Handles a data-entry mistake that was silently breaking sends for some
-// customers: staff sometimes save a number as "+92 0300-1234567" — country
-// code AND the local leading 0 both present — which used to produce 13
-// digits ("9203001234567") and get rejected outright as invalid, because
-// the old code only stripped a leading zero at the very start of the
-// string, not the one sitting right after "92". That number never even
-// reached WhatsApp, even though the number itself is perfectly valid and
-// registered.
+// --------------------------------------------------------------------------------------
+// NORMALIZE PHONE (unchanged from the single-session version)
+// --------------------------------------------------------------------------------------
 function normalizePhone(phone) {
   if (!phone) return null;
   let cleaned = phone.toString().replace(/\D/g, "");
   if (!cleaned) return null;
 
-  // "0092..." international-dialing prefix -> "92..."
   if (cleaned.startsWith("00")) {
     cleaned = cleaned.slice(2);
   }
 
-  // "920300XXXXXXX" (13 digits: country code + stray local 0 + 10-digit
-  // subscriber number) -> drop the stray 0 right after the country code.
   if (cleaned.startsWith("920") && cleaned.length === 13) {
     cleaned = "92" + cleaned.slice(3);
   }
 
-  // Local format ("0300XXXXXXX") -> strip the leading 0(s), then add 92.
   if (!cleaned.startsWith("92")) {
     cleaned = cleaned.replace(/^0+/, "");
     if (cleaned.length === 10) {
@@ -70,18 +63,7 @@ function normalizePhone(phone) {
   return cleaned;
 }
 
-function toChatId(normalizedPhone) {
-  return `${normalizedPhone}@c.us`;
-}
-
-// Resolves the actual WhatsApp ID for a normalized phone number instead of
-// blindly guessing "<number>@c.us". This is what whatsapp-web.js itself
-// recommends (Client.getNumberId) — it queries WhatsApp directly, so it
-// (a) confirms the number is actually registered on WhatsApp, giving a
-// clear "not registered" error instead of a silent no-op/failure, and
-// (b) returns the real serialized ID for numbers where the guessed
-// "<digits>@c.us" doesn't match what WhatsApp expects.
-async function resolveChatId(normalizedPhone) {
+async function resolveChatId(client, normalizedPhone) {
   const numberId = await client.getNumberId(normalizedPhone);
   if (!numberId) {
     throw new Error(`Number is not registered on WhatsApp: ${normalizedPhone}`);
@@ -90,130 +72,49 @@ async function resolveChatId(normalizedPhone) {
 }
 
 // --------------------------------------------------------------------------------------
-// SEND TEXT NOW
+// SESSION LIFECYCLE
 // --------------------------------------------------------------------------------------
-async function _sendNow(phone, message) {
-  if (!client || !isReady) throw new Error("socket-not-ready");
 
-  const normalized = normalizePhone(phone);
-  if (!normalized) {
-    console.error(`❌ WhatsApp send skipped — could not normalize phone: "${phone}"`);
-    throw new Error("invalid-phone");
-  }
-
-  try {
-    const chatId = await resolveChatId(normalized);
-    return await client.sendMessage(chatId, message);
-  } catch (err) {
-    // Log the raw phone + normalized number alongside the real error so a
-    // "some contacts don't get the message" report can be traced back to a
-    // specific number/reason instead of a generic failure.
-    console.error(`❌ WhatsApp send failed for "${phone}" (normalized: ${normalized}):`, err.message);
-    throw err;
-  }
+// Peek at an owner's session without creating one. Used by getStatus so
+// simply viewing the WhatsApp Manager screen doesn't spin up a browser.
+function peekSession(ownerId) {
+  return sessions.get(String(ownerId)) || null;
 }
 
-// --------------------------------------------------------------------------------------
-// PUBLIC API: SEND MESSAGE (QUEUE IF NEEDED)
-// --------------------------------------------------------------------------------------
-function sendMessage(phone, message, { queueIfNotReady = true } = {}) {
-  return new Promise(async (resolve, reject) => {
-    const normalized = normalizePhone(phone);
-    if (!normalized) return reject(new Error("invalid-phone"));
+// Get-or-create: used by getQR (the explicit "start connecting" action) and
+// by nothing else, so a session is only ever born when an owner actually
+// asks to link their number.
+function getOrCreateSession(ownerId) {
+  const key = String(ownerId);
+  let session = sessions.get(key);
+  if (session) return session;
 
-    if (!client || !isReady) {
-      if (queueIfNotReady) {
-        messageQueue.push({ phone, message, resolve, reject });
-        return;
-      } else {
-        return reject(new Error("socket-not-ready"));
-      }
-    }
-
-    try {
-      await _sendNow(phone, message);
-      resolve({ success: true });
-    } catch (err) {
-      reject(err);
-    }
-  });
+  session = newSessionState();
+  sessions.set(key, session);
+  initializeClient(key, session);
+  return session;
 }
 
-// --------------------------------------------------------------------------------------
-// SEND DOCUMENT
-// --------------------------------------------------------------------------------------
-async function sendDocument(phone, filePath, fileName) {
-  if (!client || !isReady) throw new Error("socket-not-ready");
+function initializeClient(ownerId, session) {
+  session.initializing = true;
+  console.log(`🔄 Initializing WhatsApp client for owner ${ownerId}...`);
 
-  const normalized = normalizePhone(phone);
-  if (!normalized) throw new Error("invalid-phone");
-  if (!fs.existsSync(filePath)) throw new Error("File does not exist: " + filePath);
-
-  const media = MessageMedia.fromFilePath(filePath);
-  if (fileName) media.filename = fileName;
-
-  const chatId = await resolveChatId(normalized);
-  return client.sendMessage(chatId, media);
-}
-
-// --------------------------------------------------------------------------------------
-async function flushQueue() {
-  if (!isReady) return;
-
-  while (messageQueue.length > 0) {
-    const job = messageQueue.shift();
-    try {
-      await _sendNow(job.phone, job.message);
-      job.resolve({ success: true });
-    } catch (err) {
-      job.reject(err);
-    }
-  }
-}
-
-async function destroyClient() {
-  if (client) {
-    try {
-      await client.destroy();
-    } catch (error) {
-      console.error("Error destroying client:", error.message);
-    }
-    client = null;
-  }
-}
-
-// --------------------------------------------------------------------------------------
-// INITIALIZE WHATSAPP CLIENT
-// --------------------------------------------------------------------------------------
-function initializeWhatsApp() {
-  if (initializing) return { getQR, getStatus, sendMessage, sendDocument, checkNumber };
-  initializing = true;
-
-  console.log("🔄 Initializing WhatsApp client (whatsapp-web.js, real browser session)...");
-
-  client = new Client({
+  const client = new Client({
     authStrategy: new LocalAuth({
-      clientId: "isp-os-backend",
+      // Namespaced per owner so each business's login/session persists
+      // independently on disk -- scanning a QR for owner A never touches
+      // owner B's linked session.
+      clientId: `owner_${ownerId}`,
       dataPath: AUTH_DIR,
     }),
-    // This host also runs a full desktop Chrome session with many tabs
-    // (confirmed via ps aux: 7+ renderer processes, ~2.5GB+ RSS), which
-    // periodically starves the headless linking browser of CPU — observed
-    // directly as irregular ~20s QR rotation ballooning to 60-71s gaps.
-    // authTimeoutMs/qrMaxRetries are relaxed so a slow/contended machine
-    // gets to actually finish the handshake instead of the library giving
-    // up and cycling a fresh QR before the scan completes.
+    // Same server-contention-tolerant timeouts as before -- now matter even
+    // more since multiple owners' Chromium instances may be competing for
+    // CPU on the same box simultaneously.
     authTimeoutMs: 0,
     qrMaxRetries: 0,
     puppeteer: {
       headless: true,
-      // Generous protocol timeout so slow message round-trips under CPU
-      // contention don't get treated as a dead browser and killed.
       protocolTimeout: 300000,
-      // Standard server-safe flags, plus flags that trim the headless
-      // browser's own baseline overhead (extensions, sync, background
-      // networking, throttling) so it competes less for CPU/RAM against
-      // the desktop Chrome session running on the same machine.
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
@@ -240,110 +141,220 @@ function initializeWhatsApp() {
         "--disable-component-update",
         "--disable-ipc-flooding-protection",
       ],
-      // No executablePath override here (unlike the desktop app, which
-      // points at an installed Google Chrome) — this server has no
-      // desktop browser installed, so we rely on Puppeteer's own bundled
-      // Chromium, downloaded automatically on `npm install`.
     },
-    // Deliberately NOT pinning webVersionCache to a specific remote HTML
-    // snapshot (the desktop app pins one, copied here initially). WhatsApp
-    // periodically stops serving old web-client versions; when that
-    // happens the page authenticates against locally stored session data
-    // but then WhatsApp's servers reject the stale client build, so
-    // whatsapp-web.js reloads the page and re-authenticates in an endless
-    // loop — which is exactly what was observed (7+ repeated
-    // "authenticated" events, climbing CPU, never reaching "ready").
-    // Leaving webVersionCache unset makes it fetch whatever version
-    // web.whatsapp.com is actually serving right now, the same fix
-    // already applied to the Baileys attempt for the identical failure
-    // mode.
   });
+  session.client = client;
 
   client.on("qr", async (qr) => {
-    qrDataUrl = await QRCode.toDataURL(qr);
-    qrGeneratedAt = Date.now();
-    qrCount += 1;
-    isReady = false;
-    console.log(`📱 QR #${qrCount} generated at`, new Date(qrGeneratedAt).toISOString());
+    session.qrDataUrl = await QRCode.toDataURL(qr);
+    session.qrGeneratedAt = Date.now();
+    session.qrCount += 1;
+    session.isReady = false;
+    console.log(`📱 [owner ${ownerId}] QR #${session.qrCount} generated at`, new Date(session.qrGeneratedAt).toISOString());
   });
 
   client.on("ready", () => {
-    console.log("✅ WhatsApp client is ready!");
-    isReady = true;
-    qrDataUrl = null;
-    qrGeneratedAt = null;
-    flushQueue();
+    console.log(`✅ [owner ${ownerId}] WhatsApp client is ready!`);
+    session.isReady = true;
+    session.qrDataUrl = null;
+    session.qrGeneratedAt = null;
+    flushQueue(ownerId, session);
   });
 
   client.on("authenticated", () => {
-    console.log("✅ WhatsApp client authenticated!");
+    console.log(`✅ [owner ${ownerId}] WhatsApp client authenticated!`);
   });
 
   client.on("auth_failure", (msg) => {
-    console.error("❌ WhatsApp authentication failed:", msg);
-    isReady = false;
+    console.error(`❌ [owner ${ownerId}] WhatsApp authentication failed:`, msg);
+    session.isReady = false;
   });
 
   client.on("disconnected", (reason) => {
-    console.log("❌ WhatsApp client disconnected:", reason);
-    isReady = false;
-    qrDataUrl = null;
-    qrGeneratedAt = null;
+    console.log(`❌ [owner ${ownerId}] WhatsApp client disconnected:`, reason);
+    session.isReady = false;
+    session.qrDataUrl = null;
+    session.qrGeneratedAt = null;
 
     setTimeout(() => {
-      console.log("♻️ Attempting to reconnect WhatsApp...");
-      destroyClient().then(() => {
-        serviceInstance = initializeWhatsApp();
+      console.log(`♻️ [owner ${ownerId}] Attempting to reconnect WhatsApp...`);
+      destroySession(ownerId).then(() => {
+        getOrCreateSession(ownerId);
       });
     }, 5000);
   });
 
   client.on("loading_screen", (percent, message) => {
-    console.log(`📱 WhatsApp loading: ${percent}% ${message}`);
+    console.log(`📱 [owner ${ownerId}] WhatsApp loading: ${percent}% ${message}`);
   });
 
   client
     .initialize()
-    .then(() => console.log("✅ WhatsApp client initialization started"))
-    .catch((error) => console.error("❌ WhatsApp client initialization failed:", error.message));
+    .then(() => console.log(`✅ [owner ${ownerId}] WhatsApp client initialization started`))
+    .catch((error) => console.error(`❌ [owner ${ownerId}] WhatsApp client initialization failed:`, error.message));
 
-  initializing = false;
+  session.initializing = false;
+}
 
-  return { getQR, getStatus, sendMessage, sendDocument, checkNumber };
+async function destroySession(ownerId) {
+  const key = String(ownerId);
+  const session = sessions.get(key);
+  if (session?.client) {
+    try {
+      await session.client.destroy();
+    } catch (error) {
+      console.error(`Error destroying client for owner ${ownerId}:`, error.message);
+    }
+  }
+  sessions.delete(key);
+}
+
+// Explicit unlink -- logs the owner's number out and frees the Chromium
+// instance, rather than just leaving a dead session around.
+async function disconnectSession(ownerId) {
+  const key = String(ownerId);
+  const session = sessions.get(key);
+  if (!session) return { success: true, wasConnected: false };
+  try {
+    if (session.client) await session.client.logout().catch(() => {});
+  } finally {
+    await destroySession(ownerId);
+  }
+  return { success: true, wasConnected: true };
+}
+
+// --------------------------------------------------------------------------------------
+// SEND TEXT NOW
+// --------------------------------------------------------------------------------------
+async function _sendNow(ownerId, phone, message) {
+  const session = peekSession(ownerId);
+  if (!session?.client || !session.isReady) throw new Error("socket-not-ready");
+
+  const normalized = normalizePhone(phone);
+  if (!normalized) {
+    console.error(`❌ WhatsApp send skipped — could not normalize phone: "${phone}"`);
+    throw new Error("invalid-phone");
+  }
+
+  try {
+    const chatId = await resolveChatId(session.client, normalized);
+    return await session.client.sendMessage(chatId, message);
+  } catch (err) {
+    console.error(`❌ [owner ${ownerId}] WhatsApp send failed for "${phone}" (normalized: ${normalized}):`, err.message);
+    throw err;
+  }
+}
+
+// --------------------------------------------------------------------------------------
+// PUBLIC API: SEND MESSAGE (QUEUE IF NEEDED)
+// --------------------------------------------------------------------------------------
+// Does NOT lazily create a session -- if this owner has never connected
+// WhatsApp at all, sending fails fast with a clear error instead of
+// spinning up a browser just to queue a message nobody will ever be there
+// to deliver.
+function sendMessage(ownerId, phone, message, { queueIfNotReady = true } = {}) {
+  return new Promise(async (resolve, reject) => {
+    const normalized = normalizePhone(phone);
+    if (!normalized) return reject(new Error("invalid-phone"));
+
+    const session = peekSession(ownerId);
+    if (!session) {
+      return reject(new Error("WhatsApp is not connected for this account. Scan the QR code from WhatsApp Manager first."));
+    }
+
+    if (!session.client || !session.isReady) {
+      if (queueIfNotReady) {
+        session.messageQueue.push({ phone, message, resolve, reject });
+        return;
+      } else {
+        return reject(new Error("socket-not-ready"));
+      }
+    }
+
+    try {
+      await _sendNow(ownerId, phone, message);
+      resolve({ success: true });
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+// --------------------------------------------------------------------------------------
+// SEND DOCUMENT
+// --------------------------------------------------------------------------------------
+async function sendDocument(ownerId, phone, filePath, fileName) {
+  const session = peekSession(ownerId);
+  if (!session?.client || !session.isReady) throw new Error("socket-not-ready");
+
+  const normalized = normalizePhone(phone);
+  if (!normalized) throw new Error("invalid-phone");
+  if (!fs.existsSync(filePath)) throw new Error("File does not exist: " + filePath);
+
+  const media = MessageMedia.fromFilePath(filePath);
+  if (fileName) media.filename = fileName;
+
+  const chatId = await resolveChatId(session.client, normalized);
+  return session.client.sendMessage(chatId, media);
+}
+
+// --------------------------------------------------------------------------------------
+async function flushQueue(ownerId, session) {
+  if (!session.isReady) return;
+
+  while (session.messageQueue.length > 0) {
+    const job = session.messageQueue.shift();
+    try {
+      await _sendNow(ownerId, job.phone, job.message);
+      job.resolve({ success: true });
+    } catch (err) {
+      job.reject(err);
+    }
+  }
 }
 
 // --------------------------------------------------------------------------------------
 // HELPERS RETURNED TO ROUTES
 // --------------------------------------------------------------------------------------
-function getQR() {
-  return qrDataUrl;
-}
 
-function getStatus() {
+// Pure peek -- never creates a session. Viewing the WhatsApp Manager screen
+// should never, by itself, launch a browser for an owner who hasn't asked
+// to connect yet.
+function getStatus(ownerId) {
+  const session = peekSession(ownerId);
+  if (!session) {
+    return { isConnected: false, socketReady: false, hasQR: false, qrAgeSeconds: null, qrCount: 0, notStarted: true };
+  }
   return {
-    isConnected: isReady,
-    socketReady: isReady,
-    hasQR: !!qrDataUrl,
-    qrAgeSeconds: qrGeneratedAt ? Math.round((Date.now() - qrGeneratedAt) / 1000) : null,
-    qrCount,
+    isConnected: session.isReady,
+    socketReady: session.isReady,
+    hasQR: !!session.qrDataUrl,
+    qrAgeSeconds: session.qrGeneratedAt ? Math.round((Date.now() - session.qrGeneratedAt) / 1000) : null,
+    qrCount: session.qrCount,
   };
 }
 
+// The explicit "start connecting" call -- lazily creates the session/
+// launches Chromium for this owner if one doesn't exist yet.
+function getQR(ownerId) {
+  const session = getOrCreateSession(ownerId);
+  return session.qrDataUrl;
+}
+
 // Diagnostic-only: checks whether a phone number is actually registered on
-// WhatsApp right now, without sending anything. Lets us answer "the number
-// definitely has WhatsApp, why won't it send?" directly against the live
-// session instead of guessing — returns the raw phone, what it normalized
-// to, whether WhatsApp confirms registration, and the resolved chat ID.
-async function checkNumber(phone) {
-  if (!client || !isReady) {
-    return { ok: false, error: "WhatsApp is not connected" };
+// WhatsApp right now, against this owner's own session, without sending
+// anything.
+async function checkNumber(ownerId, phone) {
+  const session = peekSession(ownerId);
+  if (!session?.client || !session.isReady) {
+    return { ok: false, error: "WhatsApp is not connected for this account" };
   }
   const normalized = normalizePhone(phone);
   if (!normalized) {
     return { ok: false, rawPhone: phone, error: "Could not normalize this phone number into a valid format" };
   }
   try {
-    const numberId = await client.getNumberId(normalized);
+    const numberId = await session.client.getNumberId(normalized);
     if (!numberId) {
       return {
         ok: false,
@@ -367,15 +378,16 @@ async function checkNumber(phone) {
 // --------------------------------------------------------------------------------------
 // EXPORT SERVICE
 // --------------------------------------------------------------------------------------
+// Kept as an async factory returning a resolved promise (matching the old
+// interface) so every existing `const service = await whatsappServicePromise;`
+// call site in routes/expiryChecker.js needed NO changes beyond adding
+// ownerId as the first argument to the methods themselves.
+const serviceApi = { getQR, getStatus, sendMessage, sendDocument, checkNumber, disconnectSession };
+
 module.exports = async function createWhatsAppService() {
-  if (!serviceInstance) {
-    serviceInstance = initializeWhatsApp();
-  }
-  return serviceInstance;
+  return serviceApi;
 };
 
-// Exposed as a static property (not part of the async service instance) so
-// scripts/routes can reuse the exact same normalization logic without
-// having to wait for/spin up a WhatsApp client — e.g. an offline audit of
-// every customer's stored phone number.
+// Exposed as a static property so scripts/routes can reuse the exact same
+// normalization logic without needing a WhatsApp client at all.
 module.exports.normalizePhone = normalizePhone;

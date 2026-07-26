@@ -122,7 +122,7 @@ Your ISP Team 🌐`;
         return { success: false, error: "Package does not expire tomorrow or today" };
       }
 
-      return await service.sendMessage(customer.phone, message);
+      return await service.sendMessage(customer.ownerId, customer.phone, message);
     } catch (error) {
       return { success: false, error: error.message };
     }
@@ -202,7 +202,7 @@ Best regards,
 Your ISP Team 🌐`;
       }
 
-      return await service.sendMessage(customer.phone, message);
+      return await service.sendMessage(customer.ownerId, customer.phone, message);
     } catch (error) {
       return { success: false, error: error.message };
     }
@@ -255,7 +255,7 @@ Best regards,
 Your ISP Team 🌐`;
       }
 
-      return await service.sendMessage(customer.phone, message);
+      return await service.sendMessage(customer.ownerId, customer.phone, message);
     } catch (error) {
       return { success: false, error: error.message };
     }
@@ -284,18 +284,32 @@ Your ISP Team 🌐`;
     return Customer.find({ billReceiveDate: new Date().getDate() });
   }
 
+  // Multi-tenant note: this used to check ONE global "is WhatsApp
+  // connected" gate before looping over every customer in the whole
+  // system, regardless of which owner they belonged to (a pre-existing gap
+  // -- it also never filtered by ownerId at all). Now that each owner has
+  // their own independent session, a single global gate no longer makes
+  // sense: one owner's number being connected shouldn't block (or enable)
+  // sending for a different owner's customers. Each customer's send is now
+  // checked against their OWN owner's session, and a customer whose owner
+  // hasn't connected WhatsApp is reported as skipped rather than failing
+  // the whole batch.
   async checkExpiringPackages() {
-    // sendMessage() queues silently and never resolves/rejects while
-    // WhatsApp isn't connected — fail fast here instead of hanging on
-    // every customer in the loop.
     const service = await this.whatsappServicePromise;
-    if (!service.getStatus().isConnected) {
-      throw new Error("WhatsApp is not connected");
-    }
     const tomorrowDay = new Date(Date.now() + 86400000).getDate();
     const expiringCustomers = await Customer.find({ billReceiveDate: tomorrowDay });
     const results = [];
     for (const customer of expiringCustomers) {
+      if (!service.getStatus(customer.ownerId).isConnected) {
+        results.push({
+          customer: customer.customerName,
+          phone: customer.phone,
+          success: false,
+          skipped: true,
+          error: "WhatsApp is not connected for this customer's account",
+        });
+        continue;
+      }
       const result = await this.sendExpiryReminder(customer._id);
       results.push({
         customer: customer.customerName,
@@ -313,13 +327,20 @@ Your ISP Team 🌐`;
 
   async checkDueTodayPackages() {
     const service = await this.whatsappServicePromise;
-    if (!service.getStatus().isConnected) {
-      throw new Error("WhatsApp is not connected");
-    }
     const todayDay = new Date().getDate();
     const dueCustomers = await Customer.find({ billReceiveDate: todayDay });
     const results = [];
     for (const customer of dueCustomers) {
+      if (!service.getStatus(customer.ownerId).isConnected) {
+        results.push({
+          customer: customer.customerName,
+          phone: customer.phone,
+          success: false,
+          skipped: true,
+          error: "WhatsApp is not connected for this customer's account",
+        });
+        continue;
+      }
       const result = await this.sendBillReminder(customer._id);
       results.push({
         customer: customer.customerName,

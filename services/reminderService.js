@@ -9,7 +9,7 @@ async function sendReminders(service) {
 
     const msg = `⚠️ Dear ${customer.customerName}, your package will expire soon. Please renew.`;
 
-    await service.sendMessage(customer.phone, msg);
+    await service.sendMessage(customer.ownerId, customer.phone, msg);
 
     await new Promise(r => setTimeout(r, 500));
   }

@@ -4,6 +4,7 @@ const PDFDocument = require("pdfkit");
 const fs = require("fs");
 const path = require("path");
 const AdditionalCharge = require("../models/AdditionalCharge");
+const Customer = require("../models/Customer");
 
 const createWhatsAppService = require("../services/whatsappService");
 const whatsappServicePromise = createWhatsAppService();
@@ -185,7 +186,10 @@ router.post("/generate-pdf", async (req, res) => {
     doc.end();
 
     stream.on("finish", async () => {
-      await service.sendDocument(phone, filePath, fileName);
+      // Multi-tenant: send through THIS customer's own owner's WhatsApp
+      // session, not a single shared one.
+      const customerDoc = await Customer.findById(customerObjectId).select("ownerId");
+      await service.sendDocument(customerDoc?.ownerId, phone, filePath, fileName);
       return res.json({ success: true, message: "PDF sent", data: record });
     });
 
