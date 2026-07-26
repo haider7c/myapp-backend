@@ -39,6 +39,21 @@ async function restrictToDefaultOwner(req, res, next) {
   }
 }
 
+// Lightweight check the frontend can call to decide whether to render the
+// "Sybersoc Panel" button as clickable or just a disabled placeholder --
+// deliberately placed BEFORE the router.use() below so it only needs
+// `auth` (not restrictToDefaultOwner), and returns a normal 200 with
+// allowed:false for every other account instead of a 403.
+router.get("/access-check", auth, async (req, res) => {
+  try {
+    const defaultOwnerId = await getDefaultOwnerId();
+    const requesterOwnerId = req.user.role === "owner" ? req.user.id : req.user.ownerId;
+    res.json({ allowed: !!defaultOwnerId && String(requesterOwnerId) === String(defaultOwnerId) });
+  } catch (err) {
+    res.status(500).json({ allowed: false, error: err.message });
+  }
+});
+
 router.use(auth, restrictToDefaultOwner);
 
 const {
