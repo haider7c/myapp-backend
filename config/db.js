@@ -20,6 +20,16 @@ const connectDB = async () => {
       await mongoose.connect(process.env.MONGODB_URI, {
         useNewUrlParser: true,
         useUnifiedTopology: true,
+        // Previously left at the driver defaults (serverSelectionTimeoutMS:
+        // 30000ms) -- every query issued while the connection was mid-drop
+        // silently buffered and waited up to 30s before failing, which is
+        // exactly what "backend is slow / data not fetching" looks like
+        // from the app side. Failing faster surfaces a clear error instead
+        // of a long hang, and a shorter heartbeat detects a drop sooner so
+        // reconnection starts sooner too.
+        serverSelectionTimeoutMS: 8000,
+        socketTimeoutMS: 20000,
+        heartbeatFrequencyMS: 5000,
       });
       console.log('✅ MongoDB connected');
       return;
@@ -49,6 +59,10 @@ mongoose.connection.on('disconnected', () => {
 
 mongoose.connection.on('reconnected', () => {
   console.log('✅ MongoDB reconnected');
+});
+
+mongoose.connection.on('error', (err) => {
+  console.error('❌ MongoDB connection error:', err.message);
 });
 
 module.exports = connectDB;
