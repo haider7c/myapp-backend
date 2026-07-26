@@ -3,8 +3,43 @@ const express = require("express");
 const router = express.Router();
 
 const Customer = require("../models/Customer");
+const User = require("../models/User");
 const auth = require("../middleware/auth");
 const { logActivity } = require("../services/activityLogger");
+
+// The physical MikroTik router (host/user/pass in .env) is one piece of
+// hardware managing one owner's live PPPoE subscribers -- it is NOT
+// per-tenant infrastructure. Previously these routes had no auth at all,
+// so any other account (e.g. a second owner onboarded onto this same
+// backend) could list/enable/disable/reboot the router and its users.
+// Locked to the primary account only (the oldest owner in the system --
+// the account that was already using the router before multi-tenancy
+// existed) until/unless separate per-owner router credentials are set up.
+let cachedDefaultOwnerId = null;
+async function getDefaultOwnerId() {
+  if (cachedDefaultOwnerId) return cachedDefaultOwnerId;
+  const oldest = await User.findOne({ role: "owner" }).sort({ createdAt: 1 }).select("_id");
+  cachedDefaultOwnerId = oldest?._id?.toString() || null;
+  return cachedDefaultOwnerId;
+}
+
+async function restrictToDefaultOwner(req, res, next) {
+  try {
+    const defaultOwnerId = await getDefaultOwnerId();
+    const requesterOwnerId = req.user.role === "owner" ? req.user.id : req.user.ownerId;
+    if (!defaultOwnerId || String(requesterOwnerId) !== String(defaultOwnerId)) {
+      return res.status(403).json({
+        success: false,
+        error: "MikroTik router management is restricted to the primary account.",
+      });
+    }
+    next();
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+}
+
+router.use(auth, restrictToDefaultOwner);
 
 const {
   getPPPoEUsers,
