@@ -20,6 +20,29 @@ function requireOwner(req, res, next) {
   next();
 }
 
+// Verifies a customerId/payment _id belongs to the requester's tenant
+// before anything touches it -- several routes below previously took an
+// id straight from the request with no check it belonged to the caller,
+// so any logged-in user could record or reverse a payment against, or
+// read the ledger of, another tenant's customer.
+async function assertOwnsCustomer(req, res, customerId) {
+  const owns = await Customer.exists({ _id: customerId, ownerId: ownerScope(req) });
+  if (!owns) {
+    res.status(404).json({ success: false, error: "Customer not found" });
+    return false;
+  }
+  return true;
+}
+
+async function assertOwnsPayment(req, res, paymentId) {
+  const owns = await Payment.exists({ _id: paymentId, ownerId: ownerScope(req) });
+  if (!owns) {
+    res.status(404).json({ success: false, error: "Payment not found" });
+    return false;
+  }
+  return true;
+}
+
 // POST receive a payment -- single month, multiple months, partial, and/or
 // advance, all through the same call (req 2-5). `items` is an ordered list
 // of { invoiceId } or { month, year } (for a not-yet-generated future
@@ -31,6 +54,7 @@ router.post("/", auth, async (req, res) => {
     if (!customerId || !totalAmount) {
       return res.status(400).json({ success: false, error: "customerId and totalAmount are required" });
     }
+    if (!(await assertOwnsCustomer(req, res, customerId))) return;
 
     const result = await billingEngine.applyPayment({
       customerId,
@@ -53,6 +77,7 @@ router.post("/", auth, async (req, res) => {
 // POST reverse a payment (req 7, 12) -- owner only, requires a reason.
 router.post("/:id/reverse", auth, requireOwner, async (req, res) => {
   try {
+    if (!(await assertOwnsPayment(req, res, req.params.id))) return;
     const result = await billingEngine.reversePayment(req.params.id, {
       reason: req.body.reason || "",
       reqUser: req.user,
@@ -75,7 +100,7 @@ router.post("/:id/reverse", auth, requireOwner, async (req, res) => {
 router.post("/:id/log-share", auth, async (req, res) => {
   try {
     const { via } = req.body; // e.g. "whatsapp" | "share_sheet" | "email" | "download"
-    const payment = await Payment.findById(req.params.id);
+    const payment = await Payment.findOne({ _id: req.params.id, ownerId: ownerScope(req) });
     if (!payment) return res.status(404).json({ success: false, error: "Payment not found" });
 
     const user = await User.findById(req.user.id).select("name");
@@ -104,15 +129,17 @@ router.post("/:id/log-share", auth, async (req, res) => {
 // GET a customer's full payment ledger, paginated.
 router.get("/customer/:customerId", auth, async (req, res) => {
   try {
+    if (!(await assertOwnsCustomer(req, res, req.params.customerId))) return;
     const page = Math.max(parseInt(req.query.page) || 1, 1);
     const limit = Math.min(parseInt(req.query.limit) || 20, 100);
 
+    const filter = { customerId: req.params.customerId, ownerId: ownerScope(req) };
     const [payments, total] = await Promise.all([
-      Payment.find({ customerId: req.params.customerId })
+      Payment.find(filter)
         .sort({ paymentDate: -1 })
         .skip((page - 1) * limit)
         .limit(limit),
-      Payment.countDocuments({ customerId: req.params.customerId }),
+      Payment.countDocuments(filter),
     ]);
 
     res.json({ success: true, payments, page, limit, total, totalPages: Math.ceil(total / limit) });

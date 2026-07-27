@@ -14,11 +14,27 @@ function ownerScope(req) {
   return req.user.role === "owner" ? req.user.id : req.user.ownerId;
 }
 
+// Verifies a customerId belongs to the requester's tenant before touching
+// anything for it. Every route below that takes a customerId param uses
+// this first -- previously several of them queried/acted on Invoice or
+// Customer records with no ownerId check at all, so any logged-in user
+// could view or financially adjust another tenant's invoices just by
+// knowing (or guessing) a customerId.
+async function assertOwnsCustomer(req, res, customerId) {
+  const owns = await Customer.exists({ _id: customerId, ownerId: ownerScope(req) });
+  if (!owns) {
+    res.status(404).json({ success: false, error: "Customer not found" });
+    return false;
+  }
+  return true;
+}
+
 // GET last N invoices for a customer (default 5) -- req 1's dropdown.
 router.get("/customer/:customerId/recent", auth, async (req, res) => {
   try {
+    if (!(await assertOwnsCustomer(req, res, req.params.customerId))) return;
     const limit = Math.min(parseInt(req.query.limit) || 5, 24);
-    const invoices = await Invoice.find({ customerId: req.params.customerId })
+    const invoices = await Invoice.find({ customerId: req.params.customerId, ownerId: ownerScope(req) })
       .sort({ year: -1, month: -1 })
       .limit(limit);
     res.json({ success: true, invoices });
@@ -27,13 +43,59 @@ router.get("/customer/:customerId/recent", auth, async (req, res) => {
   }
 });
 
+// GET the exact previous N calendar months (excluding the current month)
+// for a customer, oldest first, each with that month's real paid/unpaid
+// status -- used by the customer-card "Last N Months" dropdown. Unlike
+// /recent (which returns whichever invoice documents happen to exist,
+// most recent first, possibly including the current month), this always
+// returns exactly `count` real calendar months in calendar order, even if
+// no invoice was ever generated for one of them.
+router.get("/customer/:customerId/last-months", auth, async (req, res) => {
+  try {
+    if (!(await assertOwnsCustomer(req, res, req.params.customerId))) return;
+    const count = Math.min(parseInt(req.query.count) || 3, 12);
+    const ownerId = ownerScope(req);
+
+    const now = new Date();
+    let month = now.getMonth() + 1; // 1-12, current month
+    let year = now.getFullYear();
+
+    const targets = [];
+    for (let i = 0; i < count; i++) {
+      month -= 1;
+      if (month < 1) {
+        month = 12;
+        year -= 1;
+      }
+      targets.unshift({ month, year }); // unshift so the oldest month ends up first
+    }
+
+    const months = await Promise.all(
+      targets.map(async ({ month, year }) => {
+        const invoice = await Invoice.findOne({
+          customerId: req.params.customerId,
+          ownerId,
+          month,
+          year,
+        }).select("status");
+        return { month, year, status: invoice ? invoice.status : "no_bill" };
+      })
+    );
+
+    res.json({ success: true, months });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // GET complete billing history, paginated -- req 1's "Complete Billing History".
 router.get("/customer/:customerId/full", auth, async (req, res) => {
   try {
+    if (!(await assertOwnsCustomer(req, res, req.params.customerId))) return;
     const page = Math.max(parseInt(req.query.page) || 1, 1);
     const limit = Math.min(parseInt(req.query.limit) || 20, 100);
 
-    const filter = { customerId: req.params.customerId };
+    const filter = { customerId: req.params.customerId, ownerId: ownerScope(req) };
     if (req.query.status) filter.status = req.query.status;
     if (req.query.year) filter.year = parseInt(req.query.year);
     if (req.query.month) filter.month = parseInt(req.query.month);
@@ -57,8 +119,10 @@ router.get("/customer/:customerId/full", auth, async (req, res) => {
 // let the operator pick which month(s) to pay.
 router.get("/customer/:customerId/pending", auth, async (req, res) => {
   try {
+    if (!(await assertOwnsCustomer(req, res, req.params.customerId))) return;
     const invoices = await Invoice.find({
       customerId: req.params.customerId,
+      ownerId: ownerScope(req),
       status: { $in: ["pending", "partial", "overdue"] },
     }).sort({ year: 1, month: 1 });
 
@@ -72,6 +136,7 @@ router.get("/customer/:customerId/pending", auth, async (req, res) => {
 // GET financial summary cards (req 9).
 router.get("/customer/:customerId/summary", auth, async (req, res) => {
   try {
+    if (!(await assertOwnsCustomer(req, res, req.params.customerId))) return;
     const summary = await billingEngine.getFinancialSummary(req.params.customerId);
     res.json({ success: true, summary });
   } catch (error) {
@@ -82,6 +147,7 @@ router.get("/customer/:customerId/summary", auth, async (req, res) => {
 // GET billing timeline (req 8) -- default last 12 months.
 router.get("/customer/:customerId/timeline", auth, async (req, res) => {
   try {
+    if (!(await assertOwnsCustomer(req, res, req.params.customerId))) return;
     const months = Math.min(parseInt(req.query.months) || 12, 36);
     const timeline = await billingEngine.getBillingTimeline(req.params.customerId, months);
     res.json({ success: true, timeline });
@@ -97,6 +163,7 @@ router.post("/generate", auth, async (req, res) => {
     if (!customerId || !month || !year) {
       return res.status(400).json({ success: false, error: "customerId, month and year are required" });
     }
+    if (!(await assertOwnsCustomer(req, res, customerId))) return;
     const invoice = await billingEngine.generateInvoice(customerId, parseInt(month), parseInt(year), {
       generatedBy: req.user.id,
     });
@@ -114,8 +181,21 @@ function requireOwner(req, res, next) {
   next();
 }
 
+// Verifies an invoice _id belongs to the requester's tenant before any
+// adjustment route acts on it -- previously these took an invoice _id
+// straight from the URL with no check that it belonged to the caller.
+async function assertOwnsInvoice(req, res, invoiceId) {
+  const owns = await Invoice.exists({ _id: invoiceId, ownerId: ownerScope(req) });
+  if (!owns) {
+    res.status(404).json({ success: false, error: "Invoice not found" });
+    return false;
+  }
+  return true;
+}
+
 router.post("/:id/discount", auth, requireOwner, async (req, res) => {
   try {
+    if (!(await assertOwnsInvoice(req, res, req.params.id))) return;
     const invoice = await billingEngine.applyDiscount(req.params.id, Number(req.body.amount), {
       reason: req.body.reason,
       reqUser: req.user,
@@ -129,6 +209,7 @@ router.post("/:id/discount", auth, requireOwner, async (req, res) => {
 
 router.post("/:id/late-fee", auth, requireOwner, async (req, res) => {
   try {
+    if (!(await assertOwnsInvoice(req, res, req.params.id))) return;
     const invoice = await billingEngine.addLateFee(req.params.id, Number(req.body.amount), {
       reason: req.body.reason,
       reqUser: req.user,
@@ -142,6 +223,7 @@ router.post("/:id/late-fee", auth, requireOwner, async (req, res) => {
 
 router.post("/:id/waive", auth, requireOwner, async (req, res) => {
   try {
+    if (!(await assertOwnsInvoice(req, res, req.params.id))) return;
     const invoice = await billingEngine.waiveCharges(req.params.id, Number(req.body.amount), {
       reason: req.body.reason,
       reqUser: req.user,
@@ -155,6 +237,7 @@ router.post("/:id/waive", auth, requireOwner, async (req, res) => {
 
 router.post("/customer/:customerId/manual-due", auth, requireOwner, async (req, res) => {
   try {
+    if (!(await assertOwnsCustomer(req, res, req.params.customerId))) return;
     const invoice = await billingEngine.addManualDue(req.params.customerId, Number(req.body.amount), {
       reason: req.body.reason,
       reqUser: req.user,
@@ -169,7 +252,7 @@ router.post("/customer/:customerId/manual-due", auth, requireOwner, async (req, 
 // GET a single invoice by ID (for printing / detail view).
 router.get("/:id", auth, async (req, res) => {
   try {
-    const invoice = await Invoice.findById(req.params.id).populate("customerId");
+    const invoice = await Invoice.findOne({ _id: req.params.id, ownerId: ownerScope(req) }).populate("customerId");
     if (!invoice) return res.status(404).json({ success: false, error: "Invoice not found" });
     res.json({ success: true, invoice });
   } catch (error) {
