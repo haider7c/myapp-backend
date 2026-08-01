@@ -51,6 +51,11 @@ app.use("/api/inventory", require("./routes/inventoryRoutes"));
 app.use("/api/settings", require("./routes/settingsRoutes"));
 app.use("/api/manualbills", require("./routes/manualBillRoutes"));
 
+// Promise to Pay -- log "I'll pay in N days" / "on the 1st" type promises
+// from unpaid customers and resurface them as reminders (overdue/due
+// today/upcoming) on both apps until resolved.
+app.use("/api/promises", require("./routes/paymentPromiseRoutes"));
+
 app.get("/health", (req, res) => res.status(200).send("OK"));
 
 // Default route

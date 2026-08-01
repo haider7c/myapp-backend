@@ -40,6 +40,10 @@ const activityLogSchema = new mongoose.Schema(
         "reminder_template_toggled",
         "receipt_settings_updated",
         "receipt_shared",
+        // Promise to Pay module additions
+        "promise_added",
+        "promise_kept",
+        "promise_broken",
       ],
       index: true,
     },

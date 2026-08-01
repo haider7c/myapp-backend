@@ -5,6 +5,7 @@ const router = express.Router();
 const Payment = require("../models/Payment");
 const Customer = require("../models/Customer");
 const User = require("../models/User");
+const PaymentPromise = require("../models/PaymentPromise");
 const auth = require("../middleware/auth");
 const billingEngine = require("../services/billingEngine");
 const { logActivity } = require("../services/activityLogger");
@@ -67,6 +68,14 @@ router.post("/", auth, async (req, res) => {
       reqUser: req.user,
       req,
     });
+
+    // A payment coming in for this customer resolves any "promise to pay"
+    // that was still open -- the operator shouldn't have to remember to go
+    // clear it manually every time it's kept.
+    PaymentPromise.updateMany(
+      { customerId, ownerId: ownerScope(req), status: "pending" },
+      { status: "kept", resolvedAt: new Date(), resolvedById: req.user.id }
+    ).catch((err) => console.error("Failed to auto-resolve payment promise:", err.message));
 
     res.status(201).json({ success: true, ...result });
   } catch (error) {
