@@ -6,6 +6,7 @@ const express = require("express");
 const router = express.Router();
 const mongoose = require("mongoose");
 const Invoice = require("../models/Invoice");
+const BillStatus = require("../models/BillStatus");
 const Customer = require("../models/Customer");
 const auth = require("../middleware/auth");
 const billingEngine = require("../services/billingEngine");
@@ -78,7 +79,27 @@ router.get("/customer/:customerId/last-months", auth, async (req, res) => {
           month,
           year,
         }).select("status");
-        return { month, year, status: invoice ? invoice.status : "no_bill" };
+        if (invoice) return { month, year, status: invoice.status };
+
+        // Most bills are still marked paid through the older "Mark as Paid"
+        // button (CustomerList/UnpaidCustomers -> /api/billstatuses), which
+        // writes to BillStatus, not Invoice -- the two systems run side by
+        // side (see the note at the top of this file). Without this
+        // fallback, a bill paid that way shows up here as "No Bill" even
+        // though it was genuinely paid, because no Invoice document was
+        // ever created for that month. There can be more than one
+        // BillStatus row for the same month (no unique index, by design --
+        // see BillStatus.js), so treat it as paid if ANY of them are.
+        const billStatuses = await BillStatus.find({
+          customerId: req.params.customerId,
+          ownerId,
+          month,
+          year,
+        }).select("billStatus received");
+
+        if (billStatuses.length === 0) return { month, year, status: "no_bill" };
+        const paid = billStatuses.some((bs) => bs.billStatus || bs.received);
+        return { month, year, status: paid ? "paid" : "pending" };
       })
     );
 
