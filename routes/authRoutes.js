@@ -6,41 +6,20 @@ const auth = require("../middleware/auth");
 
 const router = express.Router();
 
-/**
- * REGISTER (Owner or Employee)
- */
-// Public self-registration only ever creates a brand-new independent
-// "owner" tenant. Employee accounts must NOT be creatable through this
-// public route: it used to accept a client-supplied `ownerId` straight from
-// the request body, which let anyone register themselves as an "employee"
-// under any other tenant's ownerId (just by guessing/knowing the id) and
-// then use employee-scoped routes to read that tenant's data. Employees are
-// created the safe way instead, by an authenticated owner, via
-// POST /api/employees (see routes/employeeRoutes.js), which stamps
-// ownerId from the logged-in owner's own token -- never from the request.
-router.post("/register", async (req, res) => {
-  try {
-    const { name, email, password } = req.body;
-
-    const exists = await User.findOne({ email });
-    if (exists)
-      return res.status(400).json({ message: "Email already exists" });
-
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    const user = await User.create({
-      name,
-      email,
-      password: hashedPassword,
-      role: "owner",
-      ownerId: null,
-    });
-
-    res.json({ success: true, user });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
+// REGISTER -- intentionally removed as a public route.
+//
+// This used to be an open, unauthenticated POST /register that anyone who
+// found the URL could hit to create a brand-new "owner" tenant (full app
+// access) for themselves. That was fine while this was a single-owner
+// deployment, but this backend is now meant to host multiple independent
+// shop-owner clients on the same server/database -- per the owner's
+// explicit choice, new clients are onboarded manually by the operator, not
+// via self-signup. Neither the desktop nor mobile app has ever had a
+// "Register" button wired to this route (verified -- it was reachable by
+// direct API call only), so removing it breaks nothing in either app.
+//
+// To create a new owner account, run on the server:
+//   node scripts/createOwnerAccount.js "<name>" "<email>" "<password>"
 
 /**
  * LOGIN
