@@ -16,6 +16,25 @@ const customerSchema = new mongoose.Schema(
     packageName: { type: String, required: true },
     amount: { type: Number, required: true },
 
+    // Multiple connections under one customer (e.g. a home + an office
+    // connection for the same person). Each extra connection has its own
+    // ID/package/amount; `amount` above always holds the COMBINED total
+    // (this connection's own amount + the sum of every entry here) so every
+    // existing payment/invoice/receipt code path that already reads
+    // `customer.amount` keeps working unchanged -- one customer, one bill,
+    // one payment, one receipt, covering every ID. The individual
+    // breakdown here is purely for display (customer card, forms, receipt
+    // line items) and for reconstructing the primary connection's own
+    // amount when re-opening the Edit form (primary = amount - sum(these)).
+    additionalConnections: [
+      {
+        customerId: { type: String, required: true, trim: true }, // that connection's own ID/PPPoE username
+        label: { type: String, default: "" }, // e.g. "Office", "Home 2" -- optional
+        packageName: { type: String, default: "" },
+        amount: { type: Number, required: true, default: 0 },
+      },
+    ],
+
     // ---------------------------------------------------------------
     // Customer Management module additions (all optional/additive --
     // existing code that doesn't reference these fields is unaffected).

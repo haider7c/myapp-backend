@@ -234,6 +234,21 @@ Your ISP Team 🌐`;
           invoice: { billAmount: paymentDetails.amount },
         });
       } else {
+        // Multi-connection customers (e.g. home + office): amount is the
+        // combined total across every connection ID, so list each ID and
+        // its share instead of just the flat package/amount lines.
+        const extraConnections = Array.isArray(customer.additionalConnections) ? customer.additionalConnections : [];
+        let connectionsBlock = `📦 Package: ${customer.packageName}`;
+        if (extraConnections.length > 0) {
+          const extraTotal = extraConnections.reduce((sum, c) => sum + (Number(c.amount) || 0), 0);
+          const primaryAmount = Math.max((Number(paymentDetails.amount) || 0) - extraTotal, 0);
+          connectionsBlock =
+            `🆔 ${customer.customerId}: Rs. ${primaryAmount}\n` +
+            extraConnections
+              .map((c) => `🆔 ${c.customerId}${c.label ? ` (${c.label})` : ""}: Rs. ${Number(c.amount) || 0}`)
+              .join("\n");
+        }
+
         message = `✅ *Payment Received - Thank You!*
 
 Dear ${customer.customerName},
@@ -241,8 +256,8 @@ Dear ${customer.customerName},
 We have received your payment for *${customer.packageName}* package.
 
 📋 *Payment Details:*
-📦 Package: ${customer.packageName}
-💰 Amount: Rs. ${paymentDetails.amount}
+${connectionsBlock}
+💰 Total Amount: Rs. ${paymentDetails.amount}
 💳 Method: ${paymentDetails.method}
 📅 Paid on: ${new Date().toLocaleDateString()}
 🆔 Transaction: ${paymentDetails.transactionId || "N/A"}

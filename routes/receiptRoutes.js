@@ -18,6 +18,7 @@ const HEIGHT = 5.2 * 72;
 router.post("/generate-receipt", async (req, res) => {
   try {
     const {
+      customerId,
       customerName,
       phone,
       packageName,
@@ -29,14 +30,28 @@ router.post("/generate-receipt", async (req, res) => {
       collectedBy = "Admin",
       companyName = "INTERNETWORKS",
       companyPhone = "0304-1275276",
+      additionalConnections,
     } = req.body;
+
+    // Multi-connection customers (e.g. home + office): `amount` is always
+    // the combined total across every connection ID (see models/Customer.js),
+    // so this one receipt covers all of them. When there's more than one,
+    // list a line per ID instead of just the flat total.
+    const extraConnections = Array.isArray(additionalConnections) ? additionalConnections : [];
+    const hasMultipleConnections = extraConnections.length > 0;
+    const extraTotal = extraConnections.reduce((sum, c) => sum + (Number(c.amount) || 0), 0);
+    const primaryAmount = Math.max((Number(amount) || 0) - extraTotal, 0);
 
     const billNo = Date.now().toString().slice(-12);
     const fileName = `receipt_${billNo}.pdf`;
     const filePath = path.join(tempDir, fileName);
 
+    // Grow the page to fit each extra connection line -- HEIGHT is the
+    // normal single-connection print size, only expanded when needed.
+    const pageHeight = HEIGHT + (hasMultipleConnections ? extraConnections.length * 12 : 0);
+
     const doc = new PDFDocument({
-      size: [WIDTH, HEIGHT],
+      size: [WIDTH, pageHeight],
       margins: { top: 12, left: 14, right: 14, bottom: 10 },
     });
 
@@ -87,11 +102,20 @@ router.post("/generate-receipt", async (req, res) => {
     // =======================
     row("Bill No", billNo);
     row("Name", customerName);
-    row("User ID", customerName?.replace(/\s/g, ""));
+    row("User ID", customerId || customerName?.replace(/\s/g, ""));
     row("Mobile", phone);
     row("Due Date", billDate);
     row("Package", packageName);
-    row("Fee", amount);
+
+    if (hasMultipleConnections) {
+      row(String(customerId || "Connection 1"), `Rs.${primaryAmount}`);
+      extraConnections.forEach((c) => {
+        row(`${c.customerId}${c.label ? ` (${c.label})` : ""}`, `Rs.${Number(c.amount) || 0}`);
+      });
+      row("Total Fee", amount);
+    } else {
+      row("Fee", amount);
+    }
     row("Prev Balance", "0");
 
     // =======================
