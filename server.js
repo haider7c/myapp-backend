@@ -56,6 +56,38 @@ app.use("/api/manualbills", require("./routes/manualBillRoutes"));
 // today/upcoming) on both apps until resolved.
 app.use("/api/promises", require("./routes/paymentPromiseRoutes"));
 
+// -----------------------------------------------------------------------
+// Serve the PWA build (run `npm run build:web` in the project root, which
+// runs `expo export -p web` into ../dist) so opening THIS server's own URL
+// in any browser -- desktop or mobile -- shows the installable app. No
+// separate hosting, no EAS build, no app store. Purely additive: if dist/
+// hasn't been built yet, this block is skipped entirely and the API-only
+// behavior below is exactly what it was before.
+const path = require("path");
+const fs = require("fs");
+const webBuildPath = path.join(__dirname, "..", "dist");
+if (fs.existsSync(webBuildPath)) {
+  app.use(express.static(webBuildPath));
+  // expo-router's static web export can lay routes out as either
+  // "<route>.html" or "<route>/index.html" depending on version/settings --
+  // try both, then fall back to the root index.html so client-side routing
+  // can take over for any route express.static didn't already resolve.
+  app.get(/^\/(?!api\/)(?!health$).*/, (req, res, next) => {
+    const reqPath = req.path === "/" ? "/index" : req.path;
+    const candidates = [
+      path.join(webBuildPath, `${reqPath}.html`),
+      path.join(webBuildPath, reqPath, "index.html"),
+      path.join(webBuildPath, "index.html"),
+    ];
+    const found = candidates.find((c) => fs.existsSync(c));
+    if (found) return res.sendFile(found);
+    next();
+  });
+  console.log(`\ud83d\udda5\ufe0f  Serving PWA build from ${webBuildPath}`);
+} else {
+  console.log("\u2139\ufe0f  No web build at ../dist -- run `npm run build:web` in the project root to serve the PWA from this server.");
+}
+
 app.get("/health", (req, res) => res.status(200).send("OK"));
 
 // Default route
