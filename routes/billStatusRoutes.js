@@ -349,33 +349,45 @@ router.post("/quick-receive", auth, async (req, res) => {
       });
     }
 
-    // Fire the WhatsApp confirmation. Never sent twice for the same
-    // already-paid bill (re-sending the same ID a second time just confirms
-    // it's already marked, without spamming the customer again).
-    let whatsapp = { sent: false, skipped: true, error: "Already marked paid earlier -- message not re-sent" };
+    // Fire the WhatsApp confirmation in the BACKGROUND -- do not make the
+    // client wait for it. whatsapp-web.js can take several seconds (a cold
+    // session, a slow WhatsApp Web reconnect, etc.), and awaiting it here
+    // used to hold this response open long enough to trip the reverse
+    // proxy's gateway timeout, which then returned its own HTML error page
+    // instead of Express's JSON -- the client saw "Unexpected token '<' is
+    // not valid JSON" and the chat bubble spun forever, even though the
+    // bill had already been marked received (that DB write above already
+    // completed by this point, independent of WhatsApp). Responding right
+    // away with a "pending" status and letting the send finish on its own
+    // fixes that; the activity log still records whether it actually went
+    // through.
+    let whatsapp = { sent: false, pending: false, skipped: true, error: "Already marked paid earlier -- message not re-sent" };
     if (!alreadyPaid) {
       if (!customer.phone) {
-        whatsapp = { sent: false, error: "Customer has no phone number on file" };
+        whatsapp = { sent: false, pending: false, error: "Customer has no phone number on file" };
       } else {
-        try {
-          const result = await expiryChecker.sendPaymentReceipt(customer._id, {
+        whatsapp = { sent: false, pending: true };
+        expiryChecker
+          .sendPaymentReceipt(customer._id, {
             amount: customer.amount,
             method: billStatus.paymentMethod || "Cash",
+          })
+          .then((result) => {
+            if (result.success) {
+              logActivity({
+                type: "whatsapp_sent",
+                reqUser: req.user,
+                customer,
+                message: `Sent payment receipt to ${customer.customerName} via Quick Bill Receive`,
+                details: { kind: "payment_receipt", source: "quick-receive" },
+              });
+            } else {
+              console.error(`quick-receive: WhatsApp send failed for ${customer.customerName}:`, result.error);
+            }
+          })
+          .catch((waErr) => {
+            console.error(`quick-receive: WhatsApp send threw for ${customer.customerName}:`, waErr);
           });
-          whatsapp = result.success ? { sent: true } : { sent: false, error: result.error };
-        } catch (waErr) {
-          whatsapp = { sent: false, error: waErr.message };
-        }
-      }
-
-      if (whatsapp.sent) {
-        logActivity({
-          type: "whatsapp_sent",
-          reqUser: req.user,
-          customer,
-          message: `Sent payment receipt to ${customer.customerName} via Quick Bill Receive`,
-          details: { kind: "payment_receipt", source: "quick-receive" },
-        });
       }
     }
 
