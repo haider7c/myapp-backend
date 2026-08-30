@@ -44,6 +44,8 @@ const activityLogSchema = new mongoose.Schema(
         "promise_added",
         "promise_kept",
         "promise_broken",
+        // Customer Location module addition
+        "customer_location_updated",
       ],
       index: true,
     },

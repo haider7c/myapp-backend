@@ -578,6 +578,81 @@ router.put("/:id/mark-paid", auth, async (req, res) => {
 });
 
 // =============================
+// SET/UPDATE CUSTOMER GPS LOCATION (OWNER OR ASSIGNED EMPLOYEE)
+// =============================
+// Deliberately not folded into the generic "UPDATE CUSTOMER" route above
+// (owner-only, full profile form) -- capturing GPS coordinates is a quick,
+// single-purpose action meant to be done by whoever is physically at the
+// customer's location, which is very often the employee out collecting
+// bills, not just the owner.
+router.put("/:id/location", auth, async (req, res) => {
+  try {
+    const { gpsLat, gpsLng } = req.body;
+
+    const lat = Number(gpsLat);
+    const lng = Number(gpsLng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return res.status(400).json({
+        message: "gpsLat and gpsLng must both be valid numbers",
+      });
+    }
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+      return res.status(400).json({
+        message: "gpsLat/gpsLng are outside valid coordinate ranges",
+      });
+    }
+
+    const customer = await Customer.findOne({
+      _id: req.params.id,
+      ownerId: ownerScope(req),
+    });
+
+    if (!customer) {
+      return res.status(404).json({ message: "Customer not found" });
+    }
+
+    // Same area-scoping check as mark-paid -- an employee can only set
+    // location for customers in their assigned areas.
+    if (req.user.role === "employee") {
+      const isAssignedArea = req.user.assignedAreas?.some(
+        (areaId) => areaId.toString() === customer.areaId?.toString(),
+      );
+
+      if (!isAssignedArea) {
+        return res.status(403).json({
+          message:
+            "Access denied. You can only set location for customers in your assigned areas.",
+        });
+      }
+    }
+
+    const updatedCustomer = await Customer.findOneAndUpdate(
+      { _id: req.params.id, ownerId: ownerScope(req) },
+      { gpsLat: lat, gpsLng: lng, gpsUpdatedAt: new Date() },
+      { new: true },
+    )
+      .populate("areaId", "name")
+      .populate("serviceId", "name")
+      .populate("assignedEmployeeId", "name");
+
+    logActivity({
+      type: "customer_location_updated",
+      reqUser: req.user,
+      customer: updatedCustomer,
+      message: `Updated location for ${updatedCustomer.customerName} (${updatedCustomer.customerId || "no ID"})`,
+      details: { gpsLat: lat, gpsLng: lng },
+    });
+
+    res.json({
+      message: "Customer location updated successfully",
+      customer: updatedCustomer,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// =============================
 // EMPLOYEE: GET MY CUSTOMERS (SPECIAL ROUTE)
 // =============================
 router.get("/my", auth, async (req, res) => {

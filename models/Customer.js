@@ -48,6 +48,11 @@ const customerSchema = new mongoose.Schema(
     city: { type: String, default: "" },
     gpsLat: { type: Number, default: null },
     gpsLng: { type: Number, default: null },
+    // When gpsLat/gpsLng were last set via the dedicated "Set Location"
+    // flow (device GPS capture) or the profile edit form -- lets the
+    // customer-detail view show "location set 3 days ago" instead of just
+    // the raw coordinates, and flags a location as possibly stale.
+    gpsUpdatedAt: { type: Date, default: null },
 
     // Connection information
     downloadSpeed: { type: String, default: "" },
