@@ -43,7 +43,7 @@ router.get("/", auth, async (req, res) => {
     }
 
     // Role-based filtering
-    if (req.user.role === "employee") {
+    if (req.user.role === "employee" && !req.user.locationOnly) {
       // Employee can only see customers in their assigned areas
       // Check if assignedAreas exists and is not empty
       if (!req.user.assignedAreas || req.user.assignedAreas.length === 0) {
@@ -51,7 +51,13 @@ router.get("/", auth, async (req, res) => {
       }
       query.areaId = { $in: req.user.assignedAreas };
     }
-    // Owner sees all customers within their own tenant (scoped above)
+    // Owner sees all customers within their own tenant (scoped above).
+    // A locationOnly employee also sees every customer in the tenant,
+    // unfiltered by area -- their whole job is recording locations across
+    // the board, not one area, and this is the account the Set Customer
+    // Location search box calls this route for, so an empty/incomplete
+    // "Assign Areas" checklist on their account must never silently zero
+    // out their search results the way it does for a normal employee.
 
     console.log("User role:", req.user.role);
     console.log("Assigned areas:", req.user.assignedAreas);
@@ -612,8 +618,10 @@ router.put("/:id/location", auth, async (req, res) => {
     }
 
     // Same area-scoping check as mark-paid -- an employee can only set
-    // location for customers in their assigned areas.
-    if (req.user.role === "employee") {
+    // location for customers in their assigned areas. A locationOnly
+    // employee is exempt (see the matching note on GET / above): they're
+    // meant to be able to set location for any customer in the tenant.
+    if (req.user.role === "employee" && !req.user.locationOnly) {
       const isAssignedArea = req.user.assignedAreas?.some(
         (areaId) => areaId.toString() === customer.areaId?.toString(),
       );
