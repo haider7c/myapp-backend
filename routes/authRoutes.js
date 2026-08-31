@@ -60,6 +60,7 @@ router.post("/login", async (req, res) => {
         id: user._id,
         role: user.role,
         ownerId: user.ownerId,
+        locationOnly: !!user.locationOnly,
       },
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRE }
@@ -73,6 +74,7 @@ router.post("/login", async (req, res) => {
         name: user.name,
         role: user.role,
         ownerId: user.ownerId,
+        locationOnly: !!user.locationOnly,
       },
     });
   } catch (err) {

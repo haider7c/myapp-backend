@@ -14,7 +14,7 @@ const { isOwner } = require("../middleware/roles");
  */
 router.post("/", auth, isOwner, async (req, res) => {
   try {
-    const { name, email, password, areas } = req.body;
+    const { name, email, password, areas, locationOnly } = req.body;
 
     if (!name || !email || !password) {
       return res.status(400).json({ message: "Missing fields" });
@@ -34,6 +34,7 @@ router.post("/", auth, isOwner, async (req, res) => {
       role: "employee",
       ownerId: req.user.id,
       assignedAreas: areas || [],
+      locationOnly: !!locationOnly,
     });
 
     res.json(employee);
@@ -70,7 +71,14 @@ router.get("/", auth, isOwner, async (req, res) => {
  */
 router.put("/:id", auth, isOwner, async (req, res) => {
   try {
-    const { areas } = req.body;
+    const { areas, locationOnly } = req.body;
+
+    const update = { assignedAreas: areas };
+    // Only touch locationOnly if the caller actually sent it -- the
+    // existing "Save Changes" flow on an employee's edit card doesn't know
+    // about this field yet, so it never sends it, and this route
+    // shouldn't silently reset locationOnly to false on every save.
+    if (locationOnly !== undefined) update.locationOnly = !!locationOnly;
 
     const employee = await User.findOneAndUpdate(
       {
@@ -78,7 +86,7 @@ router.put("/:id", auth, isOwner, async (req, res) => {
         ownerId: req.user.id,
         role: "employee",
       },
-      { assignedAreas: areas },
+      update,
       { new: true }
     ).select("-password");
 

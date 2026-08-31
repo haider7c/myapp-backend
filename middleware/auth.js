@@ -22,9 +22,34 @@ module.exports = async function (req, res, next) {
       id: user._id,
       role: user.role,
       ownerId: user.ownerId,
-      assignedAreas: user.assignedAreas || [] // Ensure assignedAreas is included
+      assignedAreas: user.assignedAreas || [], // Ensure assignedAreas is included
+      locationOnly: !!user.locationOnly,
     };
-    
+
+    // A locationOnly account is meant to do exactly one thing through the
+    // API: look up customers (for the autocomplete) and set/update a
+    // customer's GPS location. That's enforced here -- not just by the app
+    // routing them to a single screen -- so the restriction holds even if
+    // someone calls the API directly with this account's token. Every
+    // other authenticated route in the app runs through this same
+    // middleware, so this one check covers all of them.
+    //
+    // req.baseUrl is the mount prefix from server.js (e.g. "/api/customers")
+    // and req.path is the matched path *within* that router, so this reads
+    // as: GET /api/customers (the list, for the ID search box) or
+    // PUT /api/customers/:id/location (saving a location).
+    if (req.user.locationOnly) {
+      const isCustomerList = req.baseUrl === "/api/customers" && req.method === "GET" && req.path === "/";
+      const isSetLocation =
+        req.baseUrl === "/api/customers" && req.method === "PUT" && /^\/[^/]+\/location$/.test(req.path);
+
+      if (!isCustomerList && !isSetLocation) {
+        return res.status(403).json({
+          message: "This account can only look up customers and set their location.",
+        });
+      }
+    }
+
     console.log("Auth middleware - User:", req.user);
     next();
   } catch (err) {
