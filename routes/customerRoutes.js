@@ -661,6 +661,182 @@ router.put("/:id/location", auth, async (req, res) => {
 });
 
 // =============================
+// CONNECTION FEE: ADD/REMOVE DUE (OWNER OR ASSIGNED EMPLOYEE)
+// =============================
+// A one-time connection/installation charge, tracked entirely separately
+// from the recurring monthly package billing elsewhere in this file --
+// Invoice/services/billingEngine.js never touch these fields. There's no
+// separate "create" endpoint: setting up a fee for a customer who doesn't
+// have one yet (connectionFee.total starts at 0) and topping up an
+// existing one are the same "add due" operation below.
+router.post("/:id/connection-fee/due", auth, async (req, res) => {
+  try {
+    const { amount, direction, note } = req.body;
+
+    const numericAmount = Number(amount);
+    if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+      return res.status(400).json({ message: "Amount must be a positive number" });
+    }
+    if (direction !== "add" && direction !== "remove") {
+      return res.status(400).json({ message: "direction must be 'add' or 'remove'" });
+    }
+    if (!note || !String(note).trim()) {
+      return res.status(400).json({ message: "A note is required when adding or removing due" });
+    }
+
+    const customer = await Customer.findOne({ _id: req.params.id, ownerId: ownerScope(req) });
+    if (!customer) {
+      return res.status(404).json({ message: "Customer not found" });
+    }
+
+    // Same area-scoping as mark-paid/location -- a locationOnly employee
+    // never reaches here at all (middleware/auth.js refuses every route
+    // for that account except the customer list and the location PUT),
+    // so no extra check for it is needed on this route.
+    if (req.user.role === "employee") {
+      const isAssignedArea = req.user.assignedAreas?.some(
+        (areaId) => areaId.toString() === customer.areaId?.toString(),
+      );
+      if (!isAssignedArea) {
+        return res.status(403).json({
+          message: "Access denied. You can only manage connection fees for customers in your assigned areas.",
+        });
+      }
+    }
+
+    const currentTotal = customer.connectionFee?.total || 0;
+    const currentPaid = customer.connectionFee?.paid || 0;
+    const currentDue = currentTotal - currentPaid;
+
+    let newTotal;
+    if (direction === "add") {
+      newTotal = currentTotal + numericAmount;
+    } else {
+      // Can't remove more than what's currently due -- that would push
+      // total below what's already been paid, which would make the due
+      // negative (i.e. imply the customer overpaid, which this endpoint
+      // isn't for).
+      if (numericAmount > currentDue) {
+        return res.status(400).json({
+          message: `Cannot remove more than the current due (Rs. ${currentDue}).`,
+        });
+      }
+      newTotal = currentTotal - numericAmount;
+    }
+
+    customer.connectionFee = { total: newTotal, paid: currentPaid };
+    customer.connectionFeeHistory.push({
+      type: direction === "add" ? "due_added" : "due_removed",
+      amount: numericAmount,
+      note: String(note).trim(),
+      performedById: req.user.id,
+      performedByRole: req.user.role,
+      date: new Date(),
+    });
+    await customer.save();
+    await customer.populate([
+      { path: "areaId", select: "name" },
+      { path: "serviceId", select: "name" },
+      { path: "assignedEmployeeId", select: "name" },
+    ]);
+
+    logActivity({
+      type: direction === "add" ? "connection_fee_due_added" : "connection_fee_due_removed",
+      reqUser: req.user,
+      customer,
+      message: `${direction === "add" ? "Added to" : "Removed from"} connection fee due for ${customer.customerName} (${customer.customerId || "no ID"}): Rs. ${numericAmount} -- ${String(note).trim()}`,
+      details: { amount: numericAmount, direction, note: String(note).trim(), newTotal, newDue: newTotal - currentPaid },
+    });
+
+    res.json({
+      message: "Connection fee due updated successfully",
+      customer,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// =============================
+// CONNECTION FEE: RECORD PAYMENT (OWNER OR ASSIGNED EMPLOYEE)
+// =============================
+// Full or partial payment toward a customer's connection fee due.
+router.post("/:id/connection-fee/payment", auth, async (req, res) => {
+  try {
+    const { amount, note, paymentMethod } = req.body;
+
+    const numericAmount = Number(amount);
+    if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+      return res.status(400).json({ message: "Amount must be a positive number" });
+    }
+
+    const customer = await Customer.findOne({ _id: req.params.id, ownerId: ownerScope(req) });
+    if (!customer) {
+      return res.status(404).json({ message: "Customer not found" });
+    }
+
+    if (req.user.role === "employee") {
+      const isAssignedArea = req.user.assignedAreas?.some(
+        (areaId) => areaId.toString() === customer.areaId?.toString(),
+      );
+      if (!isAssignedArea) {
+        return res.status(403).json({
+          message: "Access denied. You can only manage connection fees for customers in your assigned areas.",
+        });
+      }
+    }
+
+    const currentTotal = customer.connectionFee?.total || 0;
+    const currentPaid = customer.connectionFee?.paid || 0;
+    const currentDue = currentTotal - currentPaid;
+
+    if (currentDue <= 0) {
+      return res.status(400).json({ message: "No connection fee due for this customer." });
+    }
+    if (numericAmount > currentDue) {
+      return res.status(400).json({
+        message: `Amount exceeds the current due (Rs. ${currentDue}).`,
+      });
+    }
+
+    const newPaid = currentPaid + numericAmount;
+    const method = paymentMethod && String(paymentMethod).trim() ? String(paymentMethod).trim() : "Cash";
+
+    customer.connectionFee = { total: currentTotal, paid: newPaid };
+    customer.connectionFeeHistory.push({
+      type: "payment",
+      amount: numericAmount,
+      note: note ? String(note).trim() : "",
+      paymentMethod: method,
+      performedById: req.user.id,
+      performedByRole: req.user.role,
+      date: new Date(),
+    });
+    await customer.save();
+    await customer.populate([
+      { path: "areaId", select: "name" },
+      { path: "serviceId", select: "name" },
+      { path: "assignedEmployeeId", select: "name" },
+    ]);
+
+    logActivity({
+      type: "connection_fee_payment_received",
+      reqUser: req.user,
+      customer,
+      message: `Connection fee payment of Rs. ${numericAmount} (${method}) received for ${customer.customerName} (${customer.customerId || "no ID"})`,
+      details: { amount: numericAmount, paymentMethod: method, note: note || "", newPaid, newDue: currentTotal - newPaid },
+    });
+
+    res.json({
+      message: "Connection fee payment recorded successfully",
+      customer,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// =============================
 // EMPLOYEE: GET MY CUSTOMERS (SPECIAL ROUTE)
 // =============================
 router.get("/my", auth, async (req, res) => {

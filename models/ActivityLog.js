@@ -46,6 +46,10 @@ const activityLogSchema = new mongoose.Schema(
         "promise_broken",
         // Customer Location module addition
         "customer_location_updated",
+        // New Connections module addition
+        "connection_fee_due_added",
+        "connection_fee_due_removed",
+        "connection_fee_payment_received",
       ],
       index: true,
     },

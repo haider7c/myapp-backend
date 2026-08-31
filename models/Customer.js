@@ -65,6 +65,31 @@ const customerSchema = new mongoose.Schema(
     activationDate: { type: Date, default: null },
     expiryDate: { type: Date, default: null },
 
+    // ---------------------------------------------------------------
+    // New Connections module addition -- a one-time connection/
+    // installation fee, entirely separate from the recurring monthly
+    // package billing above (Invoice/services/billingEngine.js never
+    // read or write these). total/paid are the running numbers (due =
+    // total - paid, computed on read rather than stored, so it can never
+    // drift out of sync); connectionFeeHistory is the full audit trail of
+    // every payment and due adjustment made against them, newest last.
+    // ---------------------------------------------------------------
+    connectionFee: {
+      total: { type: Number, default: 0 },
+      paid: { type: Number, default: 0 },
+    },
+    connectionFeeHistory: [
+      {
+        type: { type: String, enum: ["due_added", "due_removed", "payment"], required: true },
+        amount: { type: Number, required: true },
+        note: { type: String, default: "" },
+        paymentMethod: { type: String, default: "" }, // only set on "payment" entries
+        performedById: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+        performedByRole: { type: String, default: "" },
+        date: { type: Date, default: Date.now },
+      },
+    ],
+
     // Financial (running balances -- kept in sync by services/billingEngine.js
     // as invoices/payments are generated and applied; never edited directly).
     securityDeposit: { type: Number, default: 0 },
