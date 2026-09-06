@@ -5,6 +5,41 @@ const Area = require("../models/Area");
 const Service = require("../models/Service");
 const auth = require("../middleware/auth");
 const { logActivity } = require("../services/activityLogger");
+// Same module-level "create once, reuse" pattern as billStatusRoutes.js's
+// quick-receive -- createWhatsAppService() just returns a resolved
+// serviceApi object, it doesn't spin up a browser session by itself, so
+// this is cheap even for owners who've never connected WhatsApp.
+const createWhatsAppService = require("../services/whatsappService");
+const whatsappServicePromise = createWhatsAppService();
+
+// Connection fee payment confirmation -- deliberately its own message
+// (not expiryChecker.js's sendPaymentReceipt, which is written for the
+// recurring monthly package bill and talks about "next payment due on
+// Day X of next month"). A one-time connection/installation fee has no
+// next due date, so it gets its own wording instead of a misleading reuse.
+function buildConnectionFeeReceiptMessage(customer, { amount, method, total, paid, due }) {
+  const statusLine = due > 0 ? `⏳ Remaining Due: Rs. ${due}` : "✅ Fully Paid -- thank you!";
+  return `✅ *Connection Fee Payment Received*
+
+Dear ${customer.customerName},
+
+We've received your payment towards your connection/installation fee.
+
+📋 *Payment Details:*
+💰 Amount Paid: Rs. ${amount}
+💳 Method: ${method}
+📅 Paid on: ${new Date().toLocaleDateString()}
+
+🧾 *Connection Fee Summary:*
+Total Fee: Rs. ${total}
+Total Paid So Far: Rs. ${paid}
+${statusLine}
+
+For any queries, please contact support.
+
+Best regards,
+Your ISP Team 🌐`;
+}
 
 // The desktop billing app doesn't have an Area/Service concept and never
 // sends areaId/serviceId when creating a customer. Rather than reject those
@@ -827,9 +862,45 @@ router.post("/:id/connection-fee/payment", auth, async (req, res) => {
       details: { amount: numericAmount, paymentMethod: method, note: note || "", newPaid, newDue: currentTotal - newPaid },
     });
 
+    // Fire the WhatsApp confirmation in the BACKGROUND -- same reasoning as
+    // billStatusRoutes.js's quick-receive: whatsapp-web.js can take several
+    // seconds (a cold session, a slow WhatsApp Web reconnect, etc.), and the
+    // payment itself is already saved by this point regardless of whether
+    // the message goes through. Respond right away with a "pending" status
+    // instead of making the client wait.
+    let whatsapp = { sent: false, pending: false };
+    if (!customer.phone) {
+      whatsapp = { sent: false, pending: false, error: "Customer has no phone number on file" };
+    } else {
+      whatsapp = { sent: false, pending: true };
+      const newDueForMessage = Math.max(currentTotal - newPaid, 0);
+      const message = buildConnectionFeeReceiptMessage(customer, {
+        amount: numericAmount,
+        method,
+        total: currentTotal,
+        paid: newPaid,
+        due: newDueForMessage,
+      });
+      whatsappServicePromise
+        .then((service) => service.sendMessage(customer.ownerId, customer.phone, message))
+        .then(() => {
+          logActivity({
+            type: "whatsapp_sent",
+            reqUser: req.user,
+            customer,
+            message: `Sent connection fee payment receipt to ${customer.customerName} via New Connections`,
+            details: { kind: "connection_fee_receipt", amount: numericAmount },
+          });
+        })
+        .catch((waErr) => {
+          console.error(`connection-fee/payment: WhatsApp send failed for ${customer.customerName}:`, waErr.message);
+        });
+    }
+
     res.json({
       message: "Connection fee payment recorded successfully",
       customer,
+      whatsapp,
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
