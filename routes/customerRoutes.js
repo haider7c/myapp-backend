@@ -798,7 +798,7 @@ router.post("/:id/connection-fee/due", auth, async (req, res) => {
 // Full or partial payment toward a customer's connection fee due.
 router.post("/:id/connection-fee/payment", auth, async (req, res) => {
   try {
-    const { amount, note, paymentMethod } = req.body;
+    const { amount, note, paymentMethod, notifyPhone } = req.body;
 
     const numericAmount = Number(amount);
     if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
@@ -868,8 +868,23 @@ router.post("/:id/connection-fee/payment", auth, async (req, res) => {
     // payment itself is already saved by this point regardless of whether
     // the message goes through. Respond right away with a "pending" status
     // instead of making the client wait.
+    // The operator may have picked a specific one of this customer's known
+    // numbers to notify (see additionalPhones) rather than the default
+    // primary phone. Only ever honor a number that's actually on file for
+    // THIS customer -- never send a WhatsApp message, through the tenant's
+    // own connected WhatsApp session, to an arbitrary number a client
+    // happened to pass in.
+    const knownNumbers = [customer.phone, ...(customer.additionalPhones || []).map((p) => p.phone)].filter(Boolean);
+    let targetPhone = customer.phone;
+    if (notifyPhone && String(notifyPhone).trim()) {
+      const requested = String(notifyPhone).trim();
+      if (knownNumbers.includes(requested)) {
+        targetPhone = requested;
+      }
+    }
+
     let whatsapp = { sent: false, pending: false };
-    if (!customer.phone) {
+    if (!targetPhone) {
       whatsapp = { sent: false, pending: false, error: "Customer has no phone number on file" };
     } else {
       whatsapp = { sent: false, pending: true };
@@ -882,7 +897,7 @@ router.post("/:id/connection-fee/payment", auth, async (req, res) => {
         due: newDueForMessage,
       });
       whatsappServicePromise
-        .then((service) => service.sendMessage(customer.ownerId, customer.phone, message))
+        .then((service) => service.sendMessage(customer.ownerId, targetPhone, message))
         .then(() => {
           logActivity({
             type: "whatsapp_sent",

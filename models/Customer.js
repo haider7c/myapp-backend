@@ -35,6 +35,19 @@ const customerSchema = new mongoose.Schema(
       },
     ],
 
+    // Extra contact numbers beyond the required primary `phone` above --
+    // e.g. a second household member, a work line. Purely additive: no
+    // existing code that reads `phone` (WhatsApp sends, receipts, billing)
+    // changes behavior because of this. A caller that wants to notify a
+    // specific one of these (rather than the primary) passes it explicitly;
+    // it's still validated server-side against this list before use.
+    additionalPhones: [
+      {
+        phone: { type: String, required: true, trim: true },
+        label: { type: String, default: "" }, // e.g. "Home", "Work" -- optional
+      },
+    ],
+
     // ---------------------------------------------------------------
     // Customer Management module additions (all optional/additive --
     // existing code that doesn't reference these fields is unaffected).
