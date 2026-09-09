@@ -499,9 +499,21 @@ router.put("/:id", auth, async (req, res) => {
         .json({ message: "Only owner can update customer details" });
     }
 
+    // IMPORTANT: pass the payload as a $set, not as a raw replacement doc.
+    // Mongoose does NOT wrap a plain (non-$-operator) update object in $set
+    // for findOneAndUpdate -- it's sent to MongoDB as-is, and a MongoDB
+    // update with no $ operators is treated as a FULL DOCUMENT REPLACEMENT
+    // (every field not present in the body gets deleted, not left alone).
+    // The Edit Customer form's payload only includes its own visible fields
+    // (name/phone/address/package/amount/etc.) -- it never includes mobile,
+    // additionalPhones, GPS, connectionFee/connectionFeeHistory, the
+    // Customer Management profile fields, ownerId, areaId's/serviceId's
+    // sibling assignedEmployeeId, status, or the financial running-balance
+    // fields. Without $set, saving a routine edit here would silently wipe
+    // all of those on every save. $set only touches the keys actually sent.
     const updatedCustomer = await Customer.findOneAndUpdate(
       { _id: req.params.id, ownerId: ownerScope(req) },
-      req.body,
+      { $set: req.body },
       { new: true },
     )
       .populate("areaId", "name")
