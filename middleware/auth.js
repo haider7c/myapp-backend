@@ -2,7 +2,10 @@ const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 
 module.exports = async function (req, res, next) {
-  const token = req.header("Authorization")?.replace("Bearer ", "");
+  // Normal API calls send the header; a few endpoints are meant to be opened
+  // as a direct link (browser download, Linking.openURL on native), which
+  // can't set a custom header -- those fall back to ?token= on the URL.
+  const token = req.header("Authorization")?.replace("Bearer ", "") || req.query.token;
   
   if (!token) {
     return res.status(401).json({ message: "No token, authorization denied" });

@@ -156,6 +156,148 @@ router.get("/discontinued", auth, async (req, res) => {
 });
 
 // =============================
+// EXPORT CUSTOMER LIST (PDF, for the download/print button) -- one area or all
+// =============================
+// Auth note: this is meant to be opened as a direct link/download (browser
+// navigation, Linking.openURL on native) rather than called through axios,
+// so a normal request can't attach an Authorization header. The auth
+// middleware accepts the token via ?token= as a fallback for exactly this
+// case -- see middleware/auth.js.
+router.get("/export", auth, async (req, res) => {
+  try {
+    const ownerId = ownerScope(req);
+    const { areaId } = req.query;
+
+    let query = { ownerId };
+
+    if (req.user.role === "employee") {
+      if (!req.user.assignedAreas || req.user.assignedAreas.length === 0) {
+        return res.status(403).json({ message: "No areas assigned to this account." });
+      }
+      if (areaId && areaId !== "all") {
+        const allowed = req.user.assignedAreas.some((a) => a.toString() === areaId);
+        if (!allowed) {
+          return res.status(403).json({
+            message: "Access denied. You can only export customers in your assigned areas.",
+          });
+        }
+        query.areaId = areaId;
+      } else {
+        query.areaId = { $in: req.user.assignedAreas };
+      }
+    } else if (areaId && areaId !== "all") {
+      query.areaId = areaId;
+    }
+
+    const customers = await Customer.find(query)
+      .populate("areaId", "name")
+      .sort({ customerName: 1 });
+
+    let areaLabel = "All Areas";
+    if (areaId && areaId !== "all") {
+      const area = await Area.findOne({ _id: areaId, ownerId });
+      if (!area) {
+        return res.status(404).json({ message: "Area not found" });
+      }
+      areaLabel = area.name;
+    }
+
+    const PDFDocument = require("pdfkit");
+    const doc = new PDFDocument({ size: "A4", margin: 36 });
+    const safeName = areaLabel.replace(/[^a-z0-9]+/gi, "_");
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="customers_${safeName}.pdf"`);
+    doc.pipe(res);
+
+    const PAGE_BOTTOM = doc.page.height - doc.page.margins.bottom;
+    const COLS = [
+      { key: "sr", label: "#", x: 36, width: 20 },
+      { key: "customerId", label: "Username / ID", x: 60, width: 110 },
+      { key: "customerName", label: "Name", x: 178, width: 95 },
+      { key: "phone", label: "Phone", x: 281, width: 70 },
+      { key: "areaName", label: "Area", x: 359, width: 40 },
+      { key: "packageName", label: "Package", x: 407, width: 60 },
+      { key: "amount", label: "Amount", x: 475, width: 55 },
+    ];
+
+    function drawTableHeader() {
+      const y = doc.y;
+      doc.font("Helvetica-Bold").fontSize(8).fillColor("black");
+      for (const c of COLS) {
+        doc.text(c.label, c.x, y, { width: c.width });
+      }
+      const lineY = y + 12;
+      doc.moveTo(36, lineY).lineTo(559, lineY).strokeColor("#999999").stroke();
+      doc.y = lineY + 4;
+      doc.font("Helvetica").fontSize(8).fillColor("black");
+    }
+
+    doc.font("Helvetica-Bold").fontSize(16).text(`Customer List - ${areaLabel}`, 36, 36, {
+      width: 523,
+      align: "center",
+    });
+    doc
+      .font("Helvetica")
+      .fontSize(9)
+      .fillColor("#555555")
+      .text(`Generated ${new Date().toLocaleString()}  |  ${customers.length} customers`, 36, doc.y + 2, {
+        width: 523,
+        align: "center",
+      });
+    doc.fillColor("black");
+    doc.moveDown(1);
+    drawTableHeader();
+
+    let totalAmount = 0;
+    customers.forEach((c, idx) => {
+      if (doc.y > PAGE_BOTTOM - 20) {
+        doc.addPage();
+        doc.y = 36;
+        drawTableHeader();
+      }
+      const rowY = doc.y;
+      totalAmount += Number(c.amount) || 0;
+      const values = {
+        sr: String(idx + 1),
+        customerId: c.customerId || "-",
+        customerName: c.customerName || "-",
+        phone: c.phone || "-",
+        areaName: c.areaId?.name || "-",
+        packageName: c.packageName || "-",
+        amount: c.amount ? `Rs. ${Number(c.amount).toLocaleString()}` : "-",
+      };
+      for (const col of COLS) {
+        doc.text(values[col.key], col.x, rowY, { width: col.width });
+      }
+      doc.y = Math.max(doc.y, rowY + 14);
+    });
+
+    if (doc.y > PAGE_BOTTOM - 20) {
+      doc.addPage();
+      doc.y = 36;
+    }
+    doc.moveDown(0.5);
+    doc.moveTo(36, doc.y).lineTo(559, doc.y).strokeColor("#999999").stroke();
+    doc.moveDown(0.3);
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(9)
+      .text(`Total: ${customers.length} customers  |  Combined amount: Rs. ${totalAmount.toLocaleString()}`, 36, doc.y, {
+        width: 523,
+        align: "right",
+      });
+
+    doc.end();
+  } catch (error) {
+    console.error("Export customers error:", error);
+    if (!res.headersSent) {
+      res.status(500).json({ message: error.message });
+    }
+  }
+});
+
+// =============================
 // GET ONE CUSTOMER
 // =============================
 router.get("/:id", auth, async (req, res) => {
@@ -771,6 +913,11 @@ router.post("/:id/connection-fee/due", auth, async (req, res) => {
       newTotal = currentTotal - numericAmount;
     }
 
+    // customer.save() would re-validate the ENTIRE document by default, so a
+    // legacy/edge-case customer missing an unrelated required field (e.g. an
+    // old record with no serviceId) would fail to update its connection fee
+    // due even though this route never touches serviceId at all.
+    // validateModifiedOnly limits validation to the paths actually changed.
     customer.connectionFee = { total: newTotal, paid: currentPaid };
     customer.connectionFeeHistory.push({
       type: direction === "add" ? "due_added" : "due_removed",
@@ -780,7 +927,7 @@ router.post("/:id/connection-fee/due", auth, async (req, res) => {
       performedByRole: req.user.role,
       date: new Date(),
     });
-    await customer.save();
+    await customer.save({ validateModifiedOnly: true });
     await customer.populate([
       { path: "areaId", select: "name" },
       { path: "serviceId", select: "name" },
@@ -849,6 +996,11 @@ router.post("/:id/connection-fee/payment", auth, async (req, res) => {
     const newPaid = currentPaid + numericAmount;
     const method = paymentMethod && String(paymentMethod).trim() ? String(paymentMethod).trim() : "Cash";
 
+    // customer.save({ validateModifiedOnly: true }) -- see the matching note
+    // in the /due route above: plain .save() validates the whole document,
+    // so a customer missing an unrelated required field (e.g. a legacy
+    // record with no serviceId) would otherwise fail to record a connection
+    // fee payment even though this route never touches serviceId.
     customer.connectionFee = { total: currentTotal, paid: newPaid };
     customer.connectionFeeHistory.push({
       type: "payment",
@@ -859,7 +1011,7 @@ router.post("/:id/connection-fee/payment", auth, async (req, res) => {
       performedByRole: req.user.role,
       date: new Date(),
     });
-    await customer.save();
+    await customer.save({ validateModifiedOnly: true });
     await customer.populate([
       { path: "areaId", select: "name" },
       { path: "serviceId", select: "name" },
