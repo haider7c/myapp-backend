@@ -32,6 +32,7 @@ const customerSchema = new mongoose.Schema(
         label: { type: String, default: "" }, // e.g. "Office", "Home 2" -- optional
         packageName: { type: String, default: "" },
         amount: { type: Number, required: true, default: 0 },
+        address: { type: String, default: "" }, // snapshotted from the linked customer at selection time
       },
     ],
 

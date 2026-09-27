@@ -298,6 +298,70 @@ router.get("/export", auth, async (req, res) => {
 });
 
 // =============================
+// SEARCH CUSTOMERS FOR "ADDITIONAL CONNECTION" AUTOCOMPLETE
+// =============================
+// Used by the Add/Edit Customer form: as the user types into an additional
+// connection's ID field, the app calls this to look up an EXISTING customer
+// to link as that connection (same person, different ID/address), instead of
+// typing a bare string. Deliberately its own lightweight endpoint rather than
+// reusing /search/:identifier -- that one 404s on no match and returns
+// unlimited results, both wrong for a type-ahead dropdown.
+router.get("/connections/search", auth, async (req, res) => {
+  try {
+    const q = (req.query.q || "").trim();
+    if (q.length < 1) {
+      return res.json({ success: true, customers: [] });
+    }
+
+    const ownerId = ownerScope(req);
+    const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    let query = {
+      ownerId,
+      $or: [
+        { customerId: { $regex: escaped, $options: "i" } },
+        { customerName: { $regex: escaped, $options: "i" } },
+      ],
+    };
+
+    // Exclude the customer currently being edited, so it can't link to itself.
+    if (req.query.excludeId) {
+      query._id = { $ne: req.query.excludeId };
+    }
+
+    if (req.user.role === "employee") {
+      if (!req.user.assignedAreas || req.user.assignedAreas.length === 0) {
+        return res.json({ success: true, customers: [] });
+      }
+      query.areaId = { $in: req.user.assignedAreas };
+    }
+
+    const customers = await Customer.find(query)
+      .select("customerId customerName phone address packageName amount areaId")
+      .populate("areaId", "name")
+      .limit(8)
+      .sort({ customerName: 1 });
+
+    res.json({
+      success: true,
+      customers: customers.map((c) => ({
+        _id: c._id,
+        customerId: c.customerId,
+        customerName: c.customerName,
+        phone: c.phone,
+        address: c.address || "",
+        packageName: c.packageName || "",
+        amount: c.amount || 0,
+        areaName: c.areaId?.name || "",
+      })),
+    });
+  } catch (error) {
+    console.error("Connections search error:", error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+
+// =============================
 // GET ONE CUSTOMER
 // =============================
 router.get("/:id", auth, async (req, res) => {

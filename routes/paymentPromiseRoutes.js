@@ -109,7 +109,7 @@ router.get("/", auth, async (req, res) => {
   try {
     const ownerId = ownerScope(req);
     const promises = await PaymentPromise.find({ ownerId, status: "pending" })
-      .populate("customerId", "customerName customerId phone address amount")
+      .populate("customerId", "customerName customerId phone address amount additionalConnections")
       .sort({ promisedDate: 1 });
 
     const today0 = startOfDay(new Date());
