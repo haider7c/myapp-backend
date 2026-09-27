@@ -50,6 +50,8 @@ const activityLogSchema = new mongoose.Schema(
         "connection_fee_due_added",
         "connection_fee_due_removed",
         "connection_fee_payment_received",
+        // Bulk Excel import module addition
+        "customers_bulk_imported",
       ],
       index: true,
     },

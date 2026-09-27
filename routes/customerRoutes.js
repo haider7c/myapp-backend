@@ -1,10 +1,18 @@
 const express = require("express");
 const router = express.Router();
+const multer = require("multer");
+const XLSX = require("xlsx");
 const Customer = require("../models/Customer");
 const Area = require("../models/Area");
 const Service = require("../models/Service");
+const Counter = require("../models/Counter");
 const auth = require("../middleware/auth");
 const { logActivity } = require("../services/activityLogger");
+
+// Excel/CSV bulk import (POST /import-excel below) -- the file never
+// touches disk, it's parsed straight out of memory and discarded once the
+// request finishes. 10MB comfortably covers a few thousand customer rows.
+const uploadExcel = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 // Same module-level "create once, reuse" pattern as billStatusRoutes.js's
 // quick-receive -- createWhatsAppService() just returns a resolved
 // serviceApi object, it doesn't spin up a browser session by itself, so
@@ -59,6 +67,38 @@ async function getOrCreateDefault(Model, ownerId, name) {
 // employee account belongs to. Every query below must be scoped by this.
 function ownerScope(req) {
   return req.user.role === "owner" ? req.user.id : req.user.ownerId;
+}
+
+// Hands out the next customer serial number(s) for a tenant, atomically --
+// safe for concurrent single creates AND for reserving a whole block at
+// once during a bulk Excel import. Mirrors routes/counterRoutes.js's GET
+// .../customer-id (a brand new tenant's first customer is serial number 1)
+// and PUT .../increase-customer-id (the Add Customer screen still fetches
+// then bumps this the same way it always has) -- this just gives every
+// OTHER creation path (a bulk import, a future integration, the desktop
+// billing app) the same auto-numbering instead of silently leaving
+// serialNumber blank, which is what customers added outside the Add
+// Customer screen were doing before this existed.
+async function reserveSerialNumbers(ownerId, count = 1) {
+  if (count < 1) return [];
+  await Counter.findOneAndUpdate(
+    { name: "invoice", ownerId },
+    { $setOnInsert: { value: 1 } },
+    { upsert: true }
+  );
+  // new: false returns the counter as it was BEFORE this increment -- i.e.
+  // the value(s) to hand out now -- while still atomically advancing it by
+  // `count` for whoever asks next.
+  const before = await Counter.findOneAndUpdate(
+    { name: "invoice", ownerId },
+    { $inc: { value: count } },
+    { new: false, upsert: true }
+  );
+  // `before` is null only if this exact call is the one that ends up
+  // creating the counter doc (the $setOnInsert seed above lost a race) --
+  // in that case the sequence just started at 1 through `count`.
+  const start = before ? before.value : 1;
+  return Array.from({ length: count }, (_, i) => String(start + i));
 }
 
 // =============================
@@ -362,6 +402,206 @@ router.get("/connections/search", auth, async (req, res) => {
 
 
 // =============================
+// BULK IMPORT CUSTOMERS FROM AN EXCEL FILE
+// =============================
+// Companion to GET /export -- that button downloads a printable list of
+// customers, this one goes the other way: upload a filled-in spreadsheet
+// (see GET /import-template for the exact columns) and add every row as a
+// customer in one go, instead of typing each one into the Add Customer
+// form by hand. Owner-only, since this can create a large number of
+// customers at once. Safe to re-upload the same file (or a corrected
+// version of it) -- any row whose Customer ID already exists for this
+// tenant is skipped rather than duplicated.
+router.post("/import-excel", auth, uploadExcel.single("file"), async (req, res) => {
+  try {
+    if (req.user.role !== "owner") {
+      return res.status(403).json({ message: "Only the owner account can bulk-import customers." });
+    }
+    if (!req.file) {
+      return res.status(400).json({ message: "No file uploaded. Attach an Excel/CSV file." });
+    }
+
+    const ownerId = ownerScope(req);
+
+    let workbook;
+    try {
+      workbook = XLSX.read(req.file.buffer, { type: "buffer" });
+    } catch (e) {
+      return res.status(400).json({
+        message: "Couldn't read that file -- make sure it's a valid .xlsx, .xls, or .csv export.",
+      });
+    }
+
+    const sheetName = workbook.SheetNames[0];
+    if (!sheetName) {
+      return res.status(400).json({ message: "That file has no sheets." });
+    }
+    const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: "" });
+    if (rows.length === 0) {
+      return res.status(400).json({ message: "That file has no rows to import." });
+    }
+
+    // Column headers are matched case-insensitively with spaces/underscores
+    // ignored, so "Customer ID", "customerid", and "customer_id" all work --
+    // GET /import-template uses the canonical spelling shown here.
+    function getCell(row, ...names) {
+      const keys = Object.keys(row);
+      for (const name of names) {
+        const target = name.toLowerCase().replace(/[\s_]/g, "");
+        const key = keys.find((k) => k.toLowerCase().replace(/[\s_]/g, "") === target);
+        if (key !== undefined && row[key] !== undefined) return row[key];
+      }
+      return "";
+    }
+
+    const cleaned = [];
+    const failures = [];
+
+    rows.forEach((row, idx) => {
+      const rowNum = idx + 2; // header is row 1, spreadsheets are 1-indexed
+      const customerId = String(getCell(row, "Customer ID", "CustomerId", "ID", "Username")).trim();
+      const customerName = String(getCell(row, "Customer Name", "CustomerName", "Name")).trim();
+      const phone = String(getCell(row, "Phone", "Phone Number")).replace(/\D/g, "");
+      const address = String(getCell(row, "Address")).trim();
+      const packageName = String(getCell(row, "Package", "Package Name")).trim() || "Unspecified";
+      const amountRaw = getCell(row, "Amount", "Amount (Rs.)");
+      const amount = Number(String(amountRaw).replace(/[^\d.]/g, "")) || 0;
+      const billRaw = getCell(row, "Bill Receive Date", "Bill Date", "Bill Day");
+      let billReceiveDate = parseInt(billRaw, 10);
+      if (!Number.isFinite(billReceiveDate) || billReceiveDate < 1 || billReceiveDate > 31) billReceiveDate = 1;
+      const areaName = String(getCell(row, "Area")).trim();
+      const serviceName = String(getCell(row, "Service")).trim();
+      const status = String(getCell(row, "Status")).trim().toLowerCase() === "discontinued" ? "discontinued" : "active";
+
+      if (!customerId || !customerName || !phone) {
+        failures.push({
+          row: rowNum,
+          customerId: customerId || "(blank)",
+          reason: "Missing Customer ID, Customer Name, or Phone -- all three are required.",
+        });
+        return;
+      }
+
+      cleaned.push({ rowNum, customerId, customerName, phone, address, packageName, amount, billReceiveDate, areaName, serviceName, status });
+    });
+
+    // Skip rows whose Customer ID already exists for this tenant.
+    const existingIds = new Set(
+      (
+        await Customer.find({ ownerId, customerId: { $in: cleaned.map((r) => r.customerId) } }).select("customerId")
+      ).map((c) => c.customerId)
+    );
+    const toCreate = cleaned.filter((r) => !existingIds.has(r.customerId));
+    const skipped = cleaned.length - toCreate.length;
+
+    // Resolve/create each distinct Area & Service name once (not once per
+    // row), same getOrCreateDefault() every other creation path uses.
+    const defaultArea = await getOrCreateDefault(Area, ownerId, "Unassigned");
+    const defaultService = await getOrCreateDefault(Service, ownerId, "General");
+    const areaCache = {};
+    const serviceCache = {};
+
+    // Reserve one contiguous block of serial numbers for every row that
+    // will actually be created, up front -- far cheaper than reserving one
+    // at a time in the loop below, and still gap-free per the guarantees
+    // of reserveSerialNumbers().
+    const serials = await reserveSerialNumbers(ownerId, toCreate.length);
+
+    let created = 0;
+    for (let i = 0; i < toCreate.length; i++) {
+      const r = toCreate[i];
+      try {
+        let areaId = defaultArea._id;
+        if (r.areaName) {
+          if (!areaCache[r.areaName]) areaCache[r.areaName] = await getOrCreateDefault(Area, ownerId, r.areaName);
+          areaId = areaCache[r.areaName]._id;
+        }
+        let serviceId = defaultService._id;
+        if (r.serviceName) {
+          if (!serviceCache[r.serviceName]) serviceCache[r.serviceName] = await getOrCreateDefault(Service, ownerId, r.serviceName);
+          serviceId = serviceCache[r.serviceName]._id;
+        }
+
+        await Customer.create({
+          ownerId,
+          customerId: r.customerId,
+          customerName: r.customerName,
+          phone: r.phone,
+          address: r.address,
+          packageName: r.packageName,
+          amount: r.amount,
+          billReceiveDate: r.billReceiveDate,
+          areaId,
+          serviceId,
+          serialNumber: serials[i],
+          status: r.status,
+        });
+        created++;
+      } catch (err) {
+        failures.push({ row: r.rowNum, customerId: r.customerId, reason: err.message });
+      }
+    }
+
+    logActivity({
+      type: "customers_bulk_imported",
+      reqUser: req.user,
+      message: `Bulk-imported ${created} customer(s) from an Excel file (${skipped} already existed, ${failures.length} failed).`,
+      details: { created, skipped, failed: failures.length, totalRows: rows.length },
+    });
+
+    res.json({
+      success: true,
+      totalRows: rows.length,
+      created,
+      skipped,
+      failed: failures.length,
+      failures: failures.slice(0, 30),
+    });
+  } catch (error) {
+    console.error("Excel import error:", error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// =============================
+// DOWNLOAD THE EXCEL IMPORT TEMPLATE
+// =============================
+// A blank starting point with the exact column headers POST /import-excel
+// looks for, plus one filled-in example row. Opened as a direct link (same
+// ?token= fallback as GET /export) rather than fetched through axios.
+router.get("/import-template", auth, async (req, res) => {
+  try {
+    const headers = [
+      "Customer ID",
+      "Customer Name",
+      "Phone",
+      "Address",
+      "Package",
+      "Amount",
+      "Bill Receive Date",
+      "Area",
+      "Service",
+      "Status",
+    ];
+    const example = ["W90058", "John Doe", "03001234567", "House 12, Street 4", "10Mbps", 1500, 5, "277JB", "General", "active"];
+
+    const ws = XLSX.utils.aoa_to_sheet([headers, example]);
+    ws["!cols"] = headers.map((h) => ({ wch: Math.max(h.length + 2, 14) }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Customers");
+    const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", 'attachment; filename="customer_import_template.xlsx"');
+    res.send(buffer);
+  } catch (error) {
+    console.error("Import template error:", error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+
+// =============================
 // GET ONE CUSTOMER
 // =============================
 router.get("/:id", auth, async (req, res) => {
@@ -518,11 +758,25 @@ router.post("/", auth, async (req, res) => {
       serviceId = defaultService._id;
     }
 
+    // Some customers never get a serialNumber at all -- the Add Customer
+    // screen fetches one from GET /api/counters/customer-id and includes it
+    // in the request body, but anything else that creates a customer (the
+    // desktop billing app's sync, a bulk Excel import) doesn't know that
+    // dance exists and just posts a customer without one. Auto-assign it
+    // here instead, server-side, so EVERY creation path gets a real serial
+    // number rather than leaving the field blank.
+    let serialNumber = req.body.serialNumber;
+    if (!serialNumber || !String(serialNumber).trim()) {
+      const [next] = await reserveSerialNumbers(ownerId, 1);
+      serialNumber = next;
+    }
+
     const customerData = {
       ...req.body,
       ownerId: ownerId,
       areaId,
       serviceId,
+      serialNumber,
     };
 
     console.log("Creating customer with data:", customerData);
