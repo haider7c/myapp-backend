@@ -33,8 +33,24 @@ const customerSchema = new mongoose.Schema(
         packageName: { type: String, default: "" },
         amount: { type: Number, required: true, default: 0 },
         address: { type: String, default: "" }, // snapshotted from the linked customer at selection time
+        // Set only when this connection was linked via the "search existing
+        // customers" autocomplete rather than typed by hand -- the OTHER
+        // Customer document this row's data was copied from. Used purely to
+        // drive the merge/un-merge bookkeeping on that document's own
+        // `mergedInto` field (see below); this array entry itself is just a
+        // display snapshot either way.
+        linkedCustomerId: { type: mongoose.Schema.Types.ObjectId, ref: "Customer", default: null },
       },
     ],
+
+    // Set on a customer's OWN document when they've been linked as someone
+    // else's additional connection (see additionalConnections above) --
+    // points at that primary customer. A merged customer keeps existing as
+    // its own document (nothing about their bills/payments/history is
+    // touched) but is hidden from the main customer lists, Payment
+    // Promises, etc. so they don't show twice; un-linking the connection
+    // sets this back to null and they reappear on their own.
+    mergedInto: { type: mongoose.Schema.Types.ObjectId, ref: "Customer", default: null, index: true },
 
     // Extra contact numbers beyond the required primary `phone` above --
     // e.g. a second household member, a work line. Purely additive: no

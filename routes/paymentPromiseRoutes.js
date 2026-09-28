@@ -109,18 +109,23 @@ router.get("/", auth, async (req, res) => {
   try {
     const ownerId = ownerScope(req);
     const promises = await PaymentPromise.find({ ownerId, status: "pending" })
-      .populate("customerId", "customerName customerId phone address amount additionalConnections")
+      .populate("customerId", "customerName customerId phone address amount additionalConnections mergedInto")
       .sort({ promisedDate: 1 });
 
     const today0 = startOfDay(new Date());
     const today1 = endOfDay(new Date());
 
-    const bucketed = promises.map((p) => {
-      let bucket = "upcoming";
-      if (p.promisedDate < today0) bucket = "overdue";
-      else if (p.promisedDate >= today0 && p.promisedDate <= today1) bucket = "dueToday";
-      return { ...p.toObject(), bucket };
-    });
+    const bucketed = promises
+      // A customer who's since been merged into someone else's additional
+      // connections is now shown as part of THAT customer's card instead --
+      // don't also list their old standalone promise here.
+      .filter((p) => !p.customerId?.mergedInto)
+      .map((p) => {
+        let bucket = "upcoming";
+        if (p.promisedDate < today0) bucket = "overdue";
+        else if (p.promisedDate >= today0 && p.promisedDate <= today1) bucket = "dueToday";
+        return { ...p.toObject(), bucket };
+      });
 
     res.json({ success: true, promises: bucketed });
   } catch (error) {

@@ -101,13 +101,47 @@ async function reserveSerialNumbers(ownerId, count = 1) {
   return Array.from({ length: count }, (_, i) => String(start + i));
 }
 
+// Keeps every OTHER customer's `mergedInto` in sync with the additional
+// connections just saved on THIS customer (`customer`) -- called after any
+// create/update that can touch additionalConnections. A row with a
+// `linkedCustomerId` means "this connection came from an existing
+// customer's own record", so that record gets mergedInto = customer._id
+// (hidden from the main lists/Payment Promises from here on). Any customer
+// that WAS merged into this one but no longer appears in the new
+// additionalConnections list gets mergedInto cleared back to null --
+// removing the row (the trash icon in Add/Edit Customer) is how a merge is
+// undone, and this is what actually makes that stick.
+async function syncMergedConnections(customer, ownerId) {
+  const newLinkedIds = new Set(
+    (customer.additionalConnections || [])
+      .map((c) => c.linkedCustomerId && c.linkedCustomerId.toString())
+      .filter((id) => id && id !== customer._id.toString()),
+  );
+
+  const previouslyMerged = await Customer.find({ ownerId, mergedInto: customer._id }).select("_id");
+  const previouslyMergedIds = new Set(previouslyMerged.map((c) => c._id.toString()));
+
+  const toMerge = [...newLinkedIds].filter((id) => !previouslyMergedIds.has(id));
+  const toUnmerge = [...previouslyMergedIds].filter((id) => !newLinkedIds.has(id));
+
+  if (toMerge.length) {
+    await Customer.updateMany({ _id: { $in: toMerge }, ownerId }, { $set: { mergedInto: customer._id } });
+  }
+  if (toUnmerge.length) {
+    await Customer.updateMany({ _id: { $in: toUnmerge }, ownerId }, { $set: { mergedInto: null } });
+  }
+}
+
 // =============================
 // GET ALL CUSTOMERS (WITH ROLE-BASED FILTERING)
 // =============================
 router.get("/", auth, async (req, res) => {
   try {
     const { date } = req.query;
-    let query = { ownerId: ownerScope(req) };
+    // mergedInto: null also matches documents where the field doesn't
+    // exist at all (every customer saved before this feature), so this
+    // never hides anyone by accident on older data.
+    let query = { ownerId: ownerScope(req), mergedInto: null };
 
     // Date filter if provided
     if (date) {
@@ -156,7 +190,7 @@ router.get("/", auth, async (req, res) => {
 // =============================
 router.get("/active", auth, async (req, res) => {
   try {
-    let query = { status: "active", ownerId: ownerScope(req) };
+    let query = { status: "active", ownerId: ownerScope(req), mergedInto: null };
 
     // Role-based filtering
     if (req.user.role === "employee") {
@@ -178,7 +212,7 @@ router.get("/active", auth, async (req, res) => {
 // =============================
 router.get("/discontinued", auth, async (req, res) => {
   try {
-    let query = { status: "discontinued", ownerId: ownerScope(req) };
+    let query = { status: "discontinued", ownerId: ownerScope(req), mergedInto: null };
 
     // Role-based filtering
     if (req.user.role === "employee") {
@@ -208,7 +242,7 @@ router.get("/export", auth, async (req, res) => {
     const ownerId = ownerScope(req);
     const { areaId } = req.query;
 
-    let query = { ownerId };
+    let query = { ownerId, mergedInto: null };
 
     if (req.user.role === "employee") {
       if (!req.user.assignedAreas || req.user.assignedAreas.length === 0) {
@@ -357,6 +391,7 @@ router.get("/connections/search", auth, async (req, res) => {
     const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     let query = {
       ownerId,
+      mergedInto: null,
       $or: [
         { customerId: { $regex: escaped, $options: "i" } },
         { customerName: { $regex: escaped, $options: "i" } },
@@ -783,6 +818,10 @@ router.post("/", auth, async (req, res) => {
 
     const customer = await Customer.create(customerData);
 
+    if (customer.additionalConnections?.some((c) => c.linkedCustomerId)) {
+      await syncMergedConnections(customer, ownerId);
+    }
+
     // Populate the created customer before sending response
     const populatedCustomer = await Customer.findById(customer._id)
       .populate("areaId", "name")
@@ -982,6 +1021,13 @@ router.put("/:id", auth, async (req, res) => {
 
     if (!updatedCustomer) {
       return res.status(404).json({ message: "Customer not found" });
+    }
+
+    // Only bother checking merge state when this save actually touched
+    // additionalConnections -- most edits (phone, address, package...)
+    // don't, and this otherwise does two extra queries on every save.
+    if (Object.prototype.hasOwnProperty.call(req.body, "additionalConnections")) {
+      await syncMergedConnections(updatedCustomer, ownerScope(req));
     }
 
     logActivity({
