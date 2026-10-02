@@ -59,8 +59,15 @@ async function renderReceiptImage({ brand, kind, data }) {
   const browser = await getBrowser();
   const page = await browser.newPage();
   try {
-    await page.setViewport({ width: 1024, height: 800 });
-    await page.setContent(html, { waitUntil: "networkidle0" });
+    // deviceScaleFactor: 2 renders at 2x pixel density ("retina"), same as
+    // the 1024x800 CSS layout but with twice the pixels per inch -- the
+    // previous 1x screenshot looked soft/blurry once viewed full-screen on
+    // a phone. The template has no external fonts/images (see
+    // templates/whatsappReceiptTemplate.js), so "domcontentloaded" is
+    // enough -- there's no network activity for "networkidle0" to wait on,
+    // it just adds a needless delay before every render.
+    await page.setViewport({ width: 1024, height: 800, deviceScaleFactor: 2 });
+    await page.setContent(html, { waitUntil: "domcontentloaded" });
     const fileName = `${kind}_${brand}_${Date.now()}_${Math.round(Math.random() * 1e4)}.png`;
     const filePath = path.join(tempDir, fileName);
     await page.screenshot({ path: filePath, fullPage: true });
