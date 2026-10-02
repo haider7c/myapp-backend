@@ -91,9 +91,16 @@ router.put("/receipt", auth, async (req, res) => {
     delete update.ownerId;
     delete update._id;
 
+    // $set, not a bare update object: findOneAndUpdate's update document can
+    // otherwise be taken as a full REPLACEMENT of the matched document, which
+    // would silently wipe every other saved setting (layout, fieldsConfig,
+    // company contact info, etc.) whenever a caller sends a partial payload
+    // like { whatsappReceiptBrand: "..." } -- which is exactly what the
+    // WhatsApp receipt-image brand toggle on PaidCustomers/UnpaidCustomers
+    // does, since it only ever wants to update that one field.
     const settings = await ReceiptSettings.findOneAndUpdate(
       { ownerId },
-      update,
+      { $set: update },
       { new: true, upsert: true, runValidators: true }
     );
 
