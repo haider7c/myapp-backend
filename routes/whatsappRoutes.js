@@ -17,6 +17,7 @@
 const express = require("express");
 const router = express.Router();
 const jwt = require("jsonwebtoken");
+const fs = require("fs");
 
 const createWhatsAppService = require("../services/whatsappService");
 const ExpiryChecker = require("../services/expiryChecker");
@@ -357,6 +358,74 @@ router.post("/send-receipt-image/:customerId", auth, async (req, res) => {
     });
 
     res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// These two mirror send-bill-image/send-receipt-image's rendering exactly,
+// but hand the PNG straight back in the response instead of pushing it
+// through the owner's WhatsApp automation session -- so they work even
+// when that session isn't connected, and the frontend's "Share" button
+// can put the actual branded image in the device/browser's native share
+// sheet (any app), not just a plain-text summary of it.
+router.post("/bill-image/:customerId", auth, async (req, res) => {
+  try {
+    const customer = await Customer.findOne({
+      _id: req.params.customerId,
+      ownerId: requesterOwnerId(req),
+    });
+    if (!customer) return res.status(404).json({ success: false, error: "Customer not found" });
+
+    const brand = req.body.brand === "nationalbroadband" ? "nationalbroadband" : "stormfiber";
+    const month = Number(req.body.month) || new Date().getMonth() + 1;
+    const year = Number(req.body.year) || new Date().getFullYear();
+
+    const data = await buildBillImageData({ customer, ownerId: customer.ownerId, month, year });
+    const { filePath, fileName } = await renderReceiptImage({ brand, kind: "bill", data });
+
+    res.setHeader("Content-Type", "image/png");
+    res.setHeader("Content-Disposition", `inline; filename="${fileName}"`);
+    res.sendFile(filePath, (err) => {
+      fs.unlink(filePath, () => {});
+      if (err && !res.headersSent) res.status(500).json({ success: false, error: "Failed to send image" });
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.post("/receipt-image/:customerId", auth, async (req, res) => {
+  try {
+    const customer = await Customer.findOne({
+      _id: req.params.customerId,
+      ownerId: requesterOwnerId(req),
+    });
+    if (!customer) return res.status(404).json({ success: false, error: "Customer not found" });
+
+    const brand = req.body.brand === "nationalbroadband" ? "nationalbroadband" : "stormfiber";
+    const month = Number(req.body.month) || new Date().getMonth() + 1;
+    const year = Number(req.body.year) || new Date().getFullYear();
+
+    const billStatus = await BillStatus.findOne({
+      customerId: customer._id,
+      ownerId: customer.ownerId,
+      month,
+      year,
+    });
+    if (!billStatus || billStatus.billStatus !== true) {
+      return res.status(400).json({ success: false, error: "No payment record found for this customer for that month" });
+    }
+
+    const data = await buildReceiptImageData({ customer, ownerId: customer.ownerId, billStatus, month, year });
+    const { filePath, fileName } = await renderReceiptImage({ brand, kind: "receipt", data });
+
+    res.setHeader("Content-Type", "image/png");
+    res.setHeader("Content-Disposition", `inline; filename="${fileName}"`);
+    res.sendFile(filePath, (err) => {
+      fs.unlink(filePath, () => {});
+      if (err && !res.headersSent) res.status(500).json({ success: false, error: "Failed to send image" });
+    });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
