@@ -76,6 +76,33 @@ router.get("/all", auth, async (req, res) => {
 });
 
 // -------------------------------
+// DUES MAP -- one query for every customer's current previous-dues total,
+// scoped to this tenant. Used by the Paid/Unpaid Customers list screens to
+// show "Previous Dues: Rs X" on each card without an N+1 request per card.
+// Only charges flagged includeInNextBill are counted, matching every other
+// place that reads these (sendReminder's Urdu text, generate-pdf, and the
+// new WhatsApp bill/receipt images).
+// -------------------------------
+router.get("/dues-map", auth, async (req, res) => {
+  try {
+    const records = await AdditionalCharge.find({
+      ownerId: ownerScope(req),
+      includeInNextBill: true,
+    }).select("customerId totalAmount charges");
+
+    const dues = {};
+    records.forEach((r) => {
+      const total = r.totalAmount ?? (r.charges || []).reduce((s, c) => s + (Number(c.amount) || 0), 0);
+      if (total > 0) dues[r.customerId.toString()] = total;
+    });
+
+    res.json({ success: true, dues });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// -------------------------------
 // GET SPECIFIC CUSTOMER
 // -------------------------------
 router.get("/customer/:customerId", auth, async (req, res) => {

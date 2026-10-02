@@ -25,6 +25,8 @@ const Customer = require("../models/Customer");
 const User = require("../models/User");
 const auth = require("../middleware/auth");
 const { logActivity } = require("../services/activityLogger");
+const { renderReceiptImage } = require("../services/receiptImageService");
+const { buildBillImageData, buildReceiptImageData } = require("../services/receiptDataBuilder");
 
 // create ONE INSTANCE shared for all routes (the service itself is now a
 // multi-session manager, not a single connected client)
@@ -262,6 +264,99 @@ router.post("/send-payment-receipt/:customerId", auth, async (req, res) => {
       });
     }
     res.json(result);
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// -----------------------------------------------------------------------
+// WhatsApp BILL / RECEIPT IMAGES -- the branded, templated designs (see
+// templates/whatsappReceiptTemplate.js) the owner picked from, as opposed
+// to the plain-text reminders/receipts above. Used by the "Send
+// Reminder"/"Send Receipt" checkbox-selection bar on the Unpaid/Paid
+// Customers screens; brand is "stormfiber" or "nationalbroadband" (falls
+// back to stormfiber for anything else so a stale/garbled value from the
+// client never 500s).
+// -----------------------------------------------------------------------
+router.post("/send-bill-image/:customerId", auth, async (req, res) => {
+  try {
+    const customer = await Customer.findOne({
+      _id: req.params.customerId,
+      ownerId: requesterOwnerId(req),
+    });
+    if (!customer) return res.status(404).json({ success: false, error: "Customer not found" });
+    if (!customer.phone) return res.status(400).json({ success: false, error: "Customer has no phone number on file" });
+
+    const service = await whatsappServicePromise;
+    if (!service.getStatus(customer.ownerId).isConnected) {
+      return res.status(503).json({ success: false, error: "WhatsApp is not connected for this account" });
+    }
+
+    const brand = req.body.brand === "nationalbroadband" ? "nationalbroadband" : "stormfiber";
+    const month = Number(req.body.month) || new Date().getMonth() + 1;
+    const year = Number(req.body.year) || new Date().getFullYear();
+
+    const data = await buildBillImageData({ customer, ownerId: customer.ownerId, month, year });
+    const { filePath, fileName } = await renderReceiptImage({ brand, kind: "bill", data });
+
+    await service.sendDocument(customer.ownerId, customer.phone, filePath, fileName);
+
+    logActivity({
+      type: "whatsapp_sent",
+      reqUser: req.user,
+      customer,
+      message: `Sent bill image to ${customer.customerName || "customer"}`,
+      details: { kind: "bill_image", brand, month, year },
+    });
+
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.post("/send-receipt-image/:customerId", auth, async (req, res) => {
+  try {
+    const customer = await Customer.findOne({
+      _id: req.params.customerId,
+      ownerId: requesterOwnerId(req),
+    });
+    if (!customer) return res.status(404).json({ success: false, error: "Customer not found" });
+    if (!customer.phone) return res.status(400).json({ success: false, error: "Customer has no phone number on file" });
+
+    const service = await whatsappServicePromise;
+    if (!service.getStatus(customer.ownerId).isConnected) {
+      return res.status(503).json({ success: false, error: "WhatsApp is not connected for this account" });
+    }
+
+    const brand = req.body.brand === "nationalbroadband" ? "nationalbroadband" : "stormfiber";
+    const month = Number(req.body.month) || new Date().getMonth() + 1;
+    const year = Number(req.body.year) || new Date().getFullYear();
+
+    const billStatus = await BillStatus.findOne({
+      customerId: customer._id,
+      ownerId: customer.ownerId,
+      month,
+      year,
+    });
+    if (!billStatus || billStatus.billStatus !== true) {
+      return res.status(400).json({ success: false, error: "No payment record found for this customer for that month" });
+    }
+
+    const data = await buildReceiptImageData({ customer, ownerId: customer.ownerId, billStatus, month, year });
+    const { filePath, fileName } = await renderReceiptImage({ brand, kind: "receipt", data });
+
+    await service.sendDocument(customer.ownerId, customer.phone, filePath, fileName);
+
+    logActivity({
+      type: "whatsapp_sent",
+      reqUser: req.user,
+      customer,
+      message: `Sent receipt image to ${customer.customerName || "customer"}${data.amountPaid ? ` (Rs. ${data.amountPaid})` : ""}`,
+      details: { kind: "receipt_image", brand, month, year, amountPaid: data.amountPaid, remainingBalance: data.remainingBalance },
+    });
+
+    res.json({ success: true });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }

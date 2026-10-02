@@ -71,6 +71,18 @@ const receiptSettingsSchema = new mongoose.Schema(
       default: "standard",
     },
 
+    // Which of the two WhatsApp bill/receipt IMAGE designs (separate from
+    // the Receipt Template Editor's `layout` above, which drives the old
+    // printable invoice) the owner last picked when sending from the
+    // Paid/Unpaid Customers screens. Persisted here purely so it's
+    // remembered as the default the next time they open that screen --
+    // each send can still override it for that one send.
+    whatsappReceiptBrand: {
+      type: String,
+      enum: ["stormfiber", "nationalbroadband"],
+      default: "stormfiber",
+    },
+
     // Signature / authorized stamp areas (req 6) -- optional images shown
     // at the bottom of a receipt/invoice.
     signatureAreaEnabled: { type: Boolean, default: false },
