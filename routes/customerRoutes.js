@@ -2,6 +2,8 @@ const express = require("express");
 const router = express.Router();
 const multer = require("multer");
 const XLSX = require("xlsx");
+const fs = require("fs");
+const path = require("path");
 const Customer = require("../models/Customer");
 const Area = require("../models/Area");
 const Service = require("../models/Service");
@@ -13,6 +15,56 @@ const { logActivity } = require("../services/activityLogger");
 // touches disk, it's parsed straight out of memory and discarded once the
 // request finishes. 10MB comfortably covers a few thousand customer rows.
 const uploadExcel = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+
+// Customer field photos (ID card front/back, house picture) -- see the
+// /:id/photos routes near the bottom of this file. Memory storage (same
+// as uploadExcel above): at most 3 files, a few MB each, so buffering the
+// whole request before writing to disk is simpler than wiring up a
+// dynamic per-customer diskStorage destination, and it lets the route
+// validate ownership/area access BEFORE anything touches disk.
+const uploadCustomerPhotos = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024, files: 3 },
+  fileFilter: (req, file, cb) => {
+    if (!file.mimetype || !file.mimetype.startsWith("image/")) {
+      return cb(new Error("Only image files are allowed"));
+    }
+    cb(null, true);
+  },
+});
+
+// Field name -> { model field that stores its path, on-disk slot name }.
+// Keeping this one map means the upload/view/delete routes below all stay
+// in sync automatically if a slot is ever renamed.
+const CUSTOMER_PHOTO_SLOTS = {
+  idCardFront: "idCardFrontPath",
+  idCardBack: "idCardBackPath",
+  housePicture: "housePicturePath",
+};
+
+const CUSTOMER_PHOTOS_ROOT = path.join(__dirname, "..", "uploads", "customer-photos");
+
+function customerPhotosDir(ownerId, customerId) {
+  return path.join(CUSTOMER_PHOTOS_ROOT, String(ownerId), String(customerId));
+}
+
+// MIME -> extension for the handful of formats a phone camera or gallery
+// picker will realistically hand us. Falls back to the original filename's
+// own extension (if any), then to .jpg, rather than rejecting an otherwise
+// valid image over an unrecognized-but-still-"image/*" mimetype.
+function extensionForUpload(file) {
+  const byMime = {
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "image/heic": ".heic",
+    "image/heif": ".heif",
+  };
+  if (byMime[file.mimetype]) return byMime[file.mimetype];
+  const fromName = path.extname(file.originalname || "");
+  return fromName || ".jpg";
+}
 // Same module-level "create once, reuse" pattern as billStatusRoutes.js's
 // quick-receive -- createWhatsAppService() just returns a resolved
 // serviceApi object, it doesn't spin up a browser session by itself, so
@@ -1470,6 +1522,204 @@ router.get("/my", auth, async (req, res) => {
     res.json(customers);
   } catch (err) {
     res.status(500).json({ message: err.message });
+  }
+});
+
+// =============================
+// CUSTOMER FIELD PHOTOS: ID CARD (FRONT/BACK) + HOUSE PICTURE
+// (OWNER OR ASSIGNED EMPLOYEE)
+// =============================
+// Same permission shape as /:id/location above -- whoever is physically
+// at the customer's premises (very often an employee, not just the
+// owner) is who photographs their ID card and house, so this isn't
+// folded into the owner-only "UPDATE CUSTOMER" profile route either.
+// Files are never served as a plain static path: an ID card is sensitive,
+// so every read goes through GET /:id/photos/:slot below, which re-checks
+// the same ownerId/area scoping as the upload.
+function assertCanManageCustomerPhotos(req, customer, res) {
+  if (req.user.role === "employee") {
+    const isAssignedArea = req.user.assignedAreas?.some(
+      (areaId) => areaId.toString() === customer.areaId?.toString(),
+    );
+    if (!isAssignedArea) {
+      res.status(403).json({
+        message: "Access denied. You can only manage photos for customers in your assigned areas.",
+      });
+      return false;
+    }
+  }
+  return true;
+}
+
+// POST /:id/photos -- multipart/form-data with any subset of the three
+// field names in CUSTOMER_PHOTO_SLOTS. Re-uploading a slot replaces
+// whatever was there before (old file removed from disk, not just
+// orphaned) rather than accumulating files per customer forever.
+const uploadCustomerPhotosFields = uploadCustomerPhotos.fields(
+  Object.keys(CUSTOMER_PHOTO_SLOTS).map((field) => ({ name: field, maxCount: 1 })),
+);
+
+router.post(
+  "/:id/photos",
+  auth,
+  // Invoked manually (rather than passed directly as middleware) so a
+  // rejected file (wrong type, too large, too many files) comes back as a
+  // clean 400 JSON error instead of falling through to Express's default
+  // HTML error page -- there's no global error-handling middleware
+  // registered in server.js to catch it otherwise.
+  (req, res, next) => {
+    uploadCustomerPhotosFields(req, res, (err) => {
+      if (err) {
+        return res.status(400).json({ message: err.message || "Upload failed" });
+      }
+      next();
+    });
+  },
+  async (req, res) => {
+    try {
+      const customer = await Customer.findOne({ _id: req.params.id, ownerId: ownerScope(req) });
+      if (!customer) {
+        return res.status(404).json({ message: "Customer not found" });
+      }
+      if (!assertCanManageCustomerPhotos(req, customer, res)) return;
+
+      const providedFields = Object.keys(req.files || {});
+      if (providedFields.length === 0) {
+        return res.status(400).json({
+          message: `No photo provided. Expected one or more of: ${Object.keys(CUSTOMER_PHOTO_SLOTS).join(", ")}`,
+        });
+      }
+
+      const dir = customerPhotosDir(customer.ownerId, customer._id);
+      fs.mkdirSync(dir, { recursive: true });
+
+      const update = {};
+      for (const field of providedFields) {
+        const pathField = CUSTOMER_PHOTO_SLOTS[field];
+        if (!pathField) continue; // multer.fields() already restricts this, but stay defensive
+        const file = req.files[field][0];
+
+        // Clear out any previously saved file for this slot first --
+        // its extension may differ from this upload's (e.g. png -> jpg),
+        // so a plain overwrite by filename isn't enough to avoid leaving
+        // a stale second file behind.
+        const existingPath = customer[pathField];
+        if (existingPath) {
+          const existingAbs = path.join(CUSTOMER_PHOTOS_ROOT, existingPath);
+          fs.unlink(existingAbs, () => {}); // best-effort; a missing file here isn't an error
+        }
+
+        const ext = extensionForUpload(file);
+        const filename = `${field}${ext}`;
+        fs.writeFileSync(path.join(dir, filename), file.buffer);
+
+        // Stored relative to CUSTOMER_PHOTOS_ROOT, e.g.
+        // "<ownerId>/<customerId>/idCardFront.jpg" -- never a full
+        // filesystem path or a public URL.
+        update[pathField] = path.join(String(customer.ownerId), String(customer._id), filename);
+      }
+      update.photosUpdatedAt = new Date();
+
+      const updatedCustomer = await Customer.findOneAndUpdate(
+        { _id: req.params.id, ownerId: ownerScope(req) },
+        update,
+        { new: true },
+      );
+
+      logActivity({
+        type: "customer_photos_updated",
+        reqUser: req.user,
+        customer: updatedCustomer,
+        message: `Updated ${providedFields.join(", ")} photo(s) for ${updatedCustomer.customerName} (${updatedCustomer.customerId || "no ID"})`,
+        details: { fields: providedFields },
+      });
+
+      res.json({ message: "Photos uploaded successfully", customer: updatedCustomer });
+    } catch (error) {
+      res.status(500).json({ message: error.message });
+    }
+  },
+);
+
+// GET /:id/photos/:slot -- streams the actual image file. Requires the
+// same auth + ownerId/area scoping as the upload, since an ID card photo
+// is exactly the kind of thing that must never be reachable by guessing a
+// URL or by a different tenant's token.
+router.get("/:id/photos/:slot", auth, async (req, res) => {
+  try {
+    const pathField = CUSTOMER_PHOTO_SLOTS[req.params.slot];
+    if (!pathField) {
+      return res.status(400).json({ message: "Unknown photo slot" });
+    }
+
+    const customer = await Customer.findOne({ _id: req.params.id, ownerId: ownerScope(req) });
+    if (!customer) {
+      return res.status(404).json({ message: "Customer not found" });
+    }
+    if (!assertCanManageCustomerPhotos(req, customer, res)) return;
+
+    const relativePath = customer[pathField];
+    if (!relativePath) {
+      return res.status(404).json({ message: "No photo saved for this slot" });
+    }
+
+    const absolutePath = path.join(CUSTOMER_PHOTOS_ROOT, relativePath);
+    // path.join above cannot escape CUSTOMER_PHOTOS_ROOT from a value we
+    // generated ourselves on upload, but relativePath comes out of the
+    // database rather than straight off the request, so this check stays
+    // cheap insurance against ever serving an arbitrary file.
+    if (!absolutePath.startsWith(CUSTOMER_PHOTOS_ROOT)) {
+      return res.status(400).json({ message: "Invalid photo path" });
+    }
+
+    res.sendFile(absolutePath, (err) => {
+      if (err && !res.headersSent) {
+        res.status(404).json({ message: "Photo file not found on disk" });
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// DELETE /:id/photos/:slot -- clears a slot (e.g. a technician needs to
+// retake a blurry photo) without requiring a replacement to be uploaded
+// in the same request.
+router.delete("/:id/photos/:slot", auth, async (req, res) => {
+  try {
+    const pathField = CUSTOMER_PHOTO_SLOTS[req.params.slot];
+    if (!pathField) {
+      return res.status(400).json({ message: "Unknown photo slot" });
+    }
+
+    const customer = await Customer.findOne({ _id: req.params.id, ownerId: ownerScope(req) });
+    if (!customer) {
+      return res.status(404).json({ message: "Customer not found" });
+    }
+    if (!assertCanManageCustomerPhotos(req, customer, res)) return;
+
+    const relativePath = customer[pathField];
+    if (relativePath) {
+      fs.unlink(path.join(CUSTOMER_PHOTOS_ROOT, relativePath), () => {});
+    }
+
+    const updatedCustomer = await Customer.findOneAndUpdate(
+      { _id: req.params.id, ownerId: ownerScope(req) },
+      { [pathField]: null, photosUpdatedAt: new Date() },
+      { new: true },
+    );
+
+    logActivity({
+      type: "customer_photos_updated",
+      reqUser: req.user,
+      customer: updatedCustomer,
+      message: `Removed ${req.params.slot} photo for ${updatedCustomer.customerName} (${updatedCustomer.customerId || "no ID"})`,
+      details: { field: req.params.slot, removed: true },
+    });
+
+    res.json({ message: "Photo removed successfully", customer: updatedCustomer });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
   }
 });
 

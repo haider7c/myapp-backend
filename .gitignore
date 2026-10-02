@@ -3,3 +3,7 @@ node_modules/
 .auth_whatsapp/
 .wwebjs_auth/
 .wwebjs_cache/
+
+# Customer-uploaded photos (ID cards, house pictures) -- sensitive, served
+# only through the authenticated API, never committed to git.
+uploads/

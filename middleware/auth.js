@@ -45,10 +45,18 @@ module.exports = async function (req, res, next) {
       const isCustomerList = req.baseUrl === "/api/customers" && req.method === "GET" && req.path === "/";
       const isSetLocation =
         req.baseUrl === "/api/customers" && req.method === "PUT" && /^\/[^/]+\/location$/.test(req.path);
+      // Same field-work use case as location capture -- a locationOnly
+      // account may also photograph a customer's ID card / house (POST to
+      // save, GET to review what's already there) but not delete a photo,
+      // keeping this account's permissions additive-only.
+      const isCustomerPhotos =
+        req.baseUrl === "/api/customers" &&
+        (req.method === "POST" || req.method === "GET") &&
+        /^\/[^/]+\/photos(\/[^/]+)?$/.test(req.path);
 
-      if (!isCustomerList && !isSetLocation) {
+      if (!isCustomerList && !isSetLocation && !isCustomerPhotos) {
         return res.status(403).json({
-          message: "This account can only look up customers and set their location.",
+          message: "This account can only look up customers, set their location, and add their photos.",
         });
       }
     }

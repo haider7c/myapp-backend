@@ -84,6 +84,19 @@ const customerSchema = new mongoose.Schema(
     // the raw coordinates, and flags a location as possibly stale.
     gpsUpdatedAt: { type: Date, default: null },
 
+    // Field photo documentation -- ID card (front/back) and a picture of
+    // the house, captured on-site by whoever's visiting the customer (same
+    // owner-or-assigned-employee permission as GPS location above). Each
+    // field holds just the relative path under backend/uploads/ that the
+    // file was saved at (see routes/customerRoutes.js's photo routes) --
+    // NOT a public URL. These are sensitive documents, so they're only
+    // ever served back out through the authenticated
+    // GET /api/customers/:id/photos/:slot route, never as a static path.
+    idCardFrontPath: { type: String, default: null },
+    idCardBackPath: { type: String, default: null },
+    housePicturePath: { type: String, default: null },
+    photosUpdatedAt: { type: Date, default: null },
+
     // Connection information
     downloadSpeed: { type: String, default: "" },
     uploadSpeed: { type: String, default: "" },
